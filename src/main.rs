@@ -8,6 +8,8 @@ use std::collections::BTreeSet;
 use std::ffi::CStr;
 use std::mem::size_of_val;
 use std::ptr::null;
+use std::sync::mpsc::{channel, Receiver, Sender};
+
 use x11::xlib::{Display, XKeycodeToKeysym, XKeysymToString};
 use x11::{
     xlib::{ButtonPress, KeyPress, KeyRelease, XOpenDisplay},
@@ -15,7 +17,7 @@ use x11::{
 };
 
 // https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#Encoding::Events
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C)]
 struct RawEvent {
     code: u8,
@@ -52,8 +54,8 @@ impl Keysym {
 
 struct AppState {
     main_display: *mut Display,
-    _record_display: *mut Display,
     keys_down: BTreeSet<Keycode>,
+    event_receiver: Receiver<RawEvent>,
 }
 
 impl AppState {
@@ -110,56 +112,36 @@ impl AppState {
             }
         }
     }
+
+    fn event_loop(&self) {}
 }
 
-unsafe extern "C" fn callback(app_state: *mut i8, data: *mut XRecordInterceptData) {
-    let data = &mut *data;
-    if data.category != XRecordFromServer || data.client_swapped != 0 || data.data_len == 0 {
-        return;
-    }
-    let app_state = &mut *(app_state as *mut AppState);
-    let event = &*(data.data as *const RawEvent);
-    debug_assert_eq!((data.data_len * 4) as usize, size_of_val(event));
-    app_state.handle_xrecord_event(event);
-    XRecordFreeData(data as *mut _);
-}
-
-fn main() {
-    println!("Hello, world!");
-
+fn start_recording(mut sender: Sender<RawEvent>) {
+    let record_display = unsafe { XOpenDisplay(null()) };
+    let mut clients = [XRecordAllClients];
+    let range = unsafe { &mut *XRecordAllocRange() };
+    *range = XRecordRange {
+        core_requests: XRecordRange8 { first: 0, last: 0 },
+        core_replies: XRecordRange8 { first: 0, last: 0 },
+        ext_requests: XRecordExtRange {
+            ext_major: XRecordRange8 { first: 0, last: 0 },
+            ext_minor: XRecordRange16 { first: 0, last: 0 },
+        },
+        ext_replies: XRecordExtRange {
+            ext_major: XRecordRange8 { first: 0, last: 0 },
+            ext_minor: XRecordRange16 { first: 0, last: 0 },
+        },
+        delivered_events: XRecordRange8 { first: 0, last: 0 },
+        device_events: XRecordRange8 {
+            first: KeyPress as u8,
+            last: ButtonPress as u8,
+        },
+        errors: XRecordRange8 { first: 0, last: 0 },
+        client_started: 0,
+        client_died: 0,
+    };
+    let mut ranges = [range as *mut _];
     unsafe {
-        let main_display = XOpenDisplay(null());
-        let record_display = XOpenDisplay(null());
-
-        let mut app_state = AppState {
-            main_display,
-            _record_display: record_display,
-            keys_down: Default::default(),
-        };
-
-        let mut clients = [XRecordAllClients];
-        let range = XRecordAllocRange();
-        *range = XRecordRange {
-            core_requests: XRecordRange8 { first: 0, last: 0 },
-            core_replies: XRecordRange8 { first: 0, last: 0 },
-            ext_requests: XRecordExtRange {
-                ext_major: XRecordRange8 { first: 0, last: 0 },
-                ext_minor: XRecordRange16 { first: 0, last: 0 },
-            },
-            ext_replies: XRecordExtRange {
-                ext_major: XRecordRange8 { first: 0, last: 0 },
-                ext_minor: XRecordRange16 { first: 0, last: 0 },
-            },
-            delivered_events: XRecordRange8 { first: 0, last: 0 },
-            device_events: XRecordRange8 {
-                first: KeyPress as u8,
-                last: ButtonPress as u8,
-            },
-            errors: XRecordRange8 { first: 0, last: 0 },
-            client_started: 0,
-            client_died: 0,
-        };
-        let mut ranges = [range];
         let context = XRecordCreateContext(
             record_display,
             0,
@@ -172,9 +154,45 @@ fn main() {
             record_display,
             context,
             Some(callback),
-            &mut app_state as *mut _ as *mut i8,
+            &mut sender as *mut _ as *mut i8,
         );
-        println!("done");
-        //assert_eq!(result, 0);
     }
+}
+
+unsafe extern "C" fn callback(sender: *mut i8, data: *mut XRecordInterceptData) {
+    let data = &mut *data;
+    if data.category != XRecordFromServer || data.client_swapped != 0 || data.data_len == 0 {
+        return;
+    }
+    let sender = &*(sender as *mut Sender<RawEvent>);
+    let raw_event = (*(data.data as *const RawEvent)).clone();
+    debug_assert_eq!((data.data_len * 4) as usize, size_of_val(&raw_event));
+    sender.send(raw_event);
+    XRecordFreeData(data as *mut _);
+}
+
+fn main() {
+    println!("Hello, world!");
+
+    let main_display = unsafe { XOpenDisplay(null()) };
+    let (tx, rx) = channel();
+
+    let mut app_state = AppState {
+        main_display,
+        keys_down: Default::default(),
+        event_receiver: rx,
+    };
+
+    // let event_thread = std::thread::Builder::new()
+    //     .name("x11-event-handler".to_string())
+    //     .spawn(|| app_state.event_loop());
+
+    let recording_thread = std::thread::spawn(move || start_recording(tx));
+
+    app_state.event_loop();
+
+    recording_thread.join().unwrap();
+
+    println!("done");
+    //assert_eq!(result, 0);
 }
