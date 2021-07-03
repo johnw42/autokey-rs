@@ -1,3 +1,4 @@
+#![allow(non_upper_case_globals)]
 // mod x_interface;
 // mod xcb_ext;
 
@@ -6,9 +7,13 @@
 use libc::{c_int, c_uchar, c_ulong};
 use std::collections::BTreeSet;
 use std::ffi::CStr;
-use std::mem::size_of_val;
-use std::ptr::null;
-use x11::xlib::{Display, XKeycodeToKeysym, XKeysymToString};
+use std::mem::{size_of_val, MaybeUninit};
+use std::ptr::{null, null_mut};
+use x11::xlib::{
+    CreateNotify, Display, GrabModeAsync, StructureNotifyMask, SubstructureNotifyMask, Window,
+    XDefaultRootWindow, XFree, XGrabKey, XKeycodeToKeysym, XKeysymToString, XNextEvent, XQueryTree,
+    XSelectInput,
+};
 use x11::{
     xlib::{ButtonPress, KeyPress, KeyRelease, XOpenDisplay},
     xrecord::*,
@@ -89,7 +94,6 @@ impl AppState {
         );
     }
 
-    #[allow(non_upper_case_globals)]
     fn handle_xrecord_event(&mut self, event: &RawEvent) {
         match event.code as c_int {
             KeyPress => {
@@ -109,6 +113,48 @@ impl AppState {
                 println!("event type: {:?}", event);
             }
         }
+    }
+
+    fn visit_window_tree<F>(&mut self, window: Window, f: &mut F)
+    where
+        F: FnMut(&mut Self, Window),
+    {
+        f(self, window);
+        unsafe {
+            let mut root = 0;
+            let mut parent = 0;
+            let mut children = null_mut();
+            let mut num_children = 0;
+            if XQueryTree(
+                self.main_display,
+                window,
+                &mut root,
+                &mut parent,
+                &mut children,
+                &mut num_children,
+            ) != 0
+            {
+                for i in 0..(num_children as usize) {
+                    let child = *children.add(i);
+                    self.visit_window_tree(child, f);
+                }
+                XFree(children as *mut _);
+            }
+        }
+    }
+
+    fn grab_keys(&mut self, window: Window) {
+        self.visit_window_tree(window, &mut |self_, child| unsafe {
+            // XGrabKey(
+            //     self_.main_display,
+            //     52,
+            //     0xc,
+            //     child,
+            //     0,
+            //     GrabModeAsync,
+            //     GrabModeAsync,
+            // );
+        });
     }
 }
 
@@ -168,13 +214,36 @@ fn main() {
             &mut ranges[0],
             ranges.len() as i32,
         );
-        let _result = XRecordEnableContext(
-            record_display,
-            context,
-            Some(callback),
-            &mut app_state as *mut _ as *mut i8,
+        assert_ne!(
+            0,
+            XRecordEnableContextAsync(
+                record_display,
+                context,
+                Some(callback),
+                &mut app_state as *mut _ as *mut i8,
+            )
         );
     }
-    println!("done");
-    //assert_eq!(result, 0);
+
+    unsafe {
+        let root_window = XDefaultRootWindow(main_display);
+        app_state.grab_keys(root_window);
+        XSelectInput(
+            main_display,
+            root_window,
+            StructureNotifyMask | SubstructureNotifyMask,
+        );
+        loop {
+            let mut event = MaybeUninit::uninit();
+            XNextEvent(main_display, event.as_mut_ptr());
+            let event = event.assume_init();
+            match event.any.type_ as c_int {
+                CreateNotify => {
+                    let event = event.create_window;
+                    app_state.grab_keys(event.window);
+                }
+                _ => {}
+            }
+        }
+    }
 }
