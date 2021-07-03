@@ -4,16 +4,18 @@
 
 // use x_interface::*;
 
-use libc::{c_int, c_uchar, c_ulong};
+use libc::{c_int, c_uchar, c_uint, c_ulong, fd_set, timeval, FD_CLR, FD_ISSET, FD_SET, FD_ZERO};
+use std::cmp::max;
 use std::collections::BTreeSet;
 use std::ffi::CStr;
 use std::mem::{size_of_val, MaybeUninit};
 use std::ptr::{null, null_mut};
 use x11::xlib::{
     CreateNotify, Display, GrabModeAsync, StructureNotifyMask, SubstructureNotifyMask, Window,
-    XDefaultRootWindow, XFree, XGrabKey, XKeycodeToKeysym, XKeysymToString, XNextEvent, XQueryTree,
-    XSelectInput,
+    XConnectionNumber, XDefaultRootWindow, XFree, XGrabKey, XKeycodeToKeysym, XKeysymToString,
+    XNextEvent, XQueryTree, XSelectInput,
 };
+use x11::xtest::XTestFakeKeyEvent;
 use x11::{
     xlib::{ButtonPress, KeyPress, KeyRelease, XOpenDisplay},
     xrecord::*,
@@ -105,6 +107,20 @@ impl AppState {
                 let code = Keycode(event.detail);
                 self.keys_down.remove(&code);
                 self.write_key("KeyRelease", code, event.state);
+                if code.0 == 52 && event.state == 0xc {
+                    let press = 1;
+                    let release = 0;
+                    unsafe {
+                        for key in self.keys_down.iter() {
+                            XTestFakeKeyEvent(self.main_display, key.0 as c_uint, release, 0);
+                        }
+                        XTestFakeKeyEvent(self.main_display, 52, press, 0);
+                        XTestFakeKeyEvent(self.main_display, 52, release, 0);
+                        for key in self.keys_down.iter() {
+                            XTestFakeKeyEvent(self.main_display, key.0 as c_uint, press, 0);
+                        }
+                    }
+                }
             }
             ButtonPress => {
                 println!("ButtonPress: {} {:x}", event.detail, event.state);
@@ -145,20 +161,20 @@ impl AppState {
 
     fn grab_keys(&mut self, window: Window) {
         self.visit_window_tree(window, &mut |self_, child| unsafe {
-            // XGrabKey(
-            //     self_.main_display,
-            //     52,
-            //     0xc,
-            //     child,
-            //     0,
-            //     GrabModeAsync,
-            //     GrabModeAsync,
-            // );
+            XGrabKey(
+                self_.main_display,
+                52,
+                0xc,
+                child,
+                0,
+                GrabModeAsync,
+                GrabModeAsync,
+            );
         });
     }
 }
 
-unsafe extern "C" fn callback(app_state: *mut i8, data: *mut XRecordInterceptData) {
+unsafe extern "C" fn xrecord_callback(app_state: *mut i8, data: *mut XRecordInterceptData) {
     let data = &mut *data;
     if data.category != XRecordFromServer || data.client_swapped != 0 || data.data_len == 0 {
         return;
@@ -219,13 +235,14 @@ fn main() {
             XRecordEnableContextAsync(
                 record_display,
                 context,
-                Some(callback),
+                Some(xrecord_callback),
                 &mut app_state as *mut _ as *mut i8,
             )
         );
-    }
 
-    unsafe {
+        let main_fd = XConnectionNumber(main_display);
+        let record_fd = XConnectionNumber(record_display);
+
         let root_window = XDefaultRootWindow(main_display);
         app_state.grab_keys(root_window);
         XSelectInput(
@@ -234,15 +251,32 @@ fn main() {
             StructureNotifyMask | SubstructureNotifyMask,
         );
         loop {
-            let mut event = MaybeUninit::uninit();
-            XNextEvent(main_display, event.as_mut_ptr());
-            let event = event.assume_init();
-            match event.any.type_ as c_int {
-                CreateNotify => {
-                    let event = event.create_window;
-                    app_state.grab_keys(event.window);
+            let mut readfs = MaybeUninit::uninit();
+            FD_ZERO(readfs.as_mut_ptr());
+            let mut readfds = readfs.assume_init();
+            FD_SET(main_fd, &mut readfds);
+            FD_SET(record_fd, &mut readfds);
+            libc::select(
+                max(dbg!(main_fd), dbg!(record_fd)) + 1,
+                &mut readfds,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            );
+            if FD_ISSET(record_fd, &mut readfds) {
+                XRecordProcessReplies(record_display);
+            }
+            if FD_ISSET(main_fd, &mut readfds) {
+                let mut event = MaybeUninit::uninit();
+                XNextEvent(main_display, event.as_mut_ptr());
+                let event = event.assume_init();
+                match event.any.type_ as c_int {
+                    CreateNotify => {
+                        let event = event.create_window;
+                        app_state.grab_keys(event.window);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
