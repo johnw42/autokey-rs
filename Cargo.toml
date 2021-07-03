@@ -1,0 +1,15 @@
+[package]
+name = "autokey-rs"
+version = "0.1.0"
+authors = ["John Williams <jrw@google.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+#rustc = "foo"
+#rustflags = ["-C", "link-arg=-foo"]
+
+[dependencies]
+xcb = { version="^0.9.0", features=["record"] }
+libc = "0.2.97"
+x11 = { version="^2.18.1", features=["xrecord"] }
