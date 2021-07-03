@@ -3,8 +3,9 @@
 
 // use x_interface::*;
 
-use libc::{c_int, c_uchar};
-use std::ffi::{CStr, CString};
+use libc::{c_int, c_uchar, c_ulong};
+use std::collections::BTreeSet;
+use std::ffi::CStr;
 use std::mem::size_of_val;
 use std::ptr::null;
 use x11::xlib::{Display, XKeycodeToKeysym, XKeysymToString};
@@ -33,52 +34,93 @@ struct RawEvent {
     unused: u8,
 }
 
-struct AppState {
-    main_display: *mut Display,
-    record_display: *mut Display,
-}
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
+struct Keycode(c_uchar);
 
-impl AppState {
-    unsafe fn write_key(&self, label: &str, keycode: c_uchar, state: u16) {
-        let keysym = XKeycodeToKeysym(self.main_display, keycode, 0);
-        let keysym_str = XKeysymToString(keysym);
-        let keysym_str = (!keysym_str.is_null()).then(|| CStr::from_ptr(keysym_str).to_owned());
-        println!(
-            "{}: code={}, sym={} ({:?}), state={}",
-            label,
-            keycode,
-            keysym,
-            keysym_str.unwrap_or_else(|| CString::new("???").expect("conversion failed")),
-            state
-        );
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
+struct Keysym(c_ulong);
+
+impl Keysym {
+    fn to_c_str(&self) -> Option<&'static CStr> {
+        unsafe {
+            XKeysymToString(self.0)
+                .as_ref()
+                .map(|ptr| CStr::from_ptr(ptr))
+        }
     }
 }
 
-#[allow(non_upper_case_globals)]
+struct AppState {
+    main_display: *mut Display,
+    _record_display: *mut Display,
+    keys_down: BTreeSet<Keycode>,
+}
+
+impl AppState {
+    fn keycode_to_keysym(&self, keycode: Keycode) -> Option<Keysym> {
+        unsafe {
+            match XKeycodeToKeysym(self.main_display, keycode.0, 0) {
+                0 => None,
+                n => Some(Keysym(n)),
+            }
+        }
+    }
+
+    fn keycode_to_string(&self, keycode: Keycode) -> String {
+        self.keycode_to_keysym(keycode)
+            .and_then(|k| k.to_c_str())
+            .map(|s| format!("<{}>", s.to_string_lossy()))
+            .unwrap_or_else(|| format!("<keycode_{}>", keycode.0))
+    }
+
+    fn write_key(&self, label: &str, keycode: Keycode, state: u16) {
+        println!(
+            "{}: code={}, sym={} ({:?}), state={}, down=[{}]",
+            label,
+            keycode.0,
+            self.keycode_to_keysym(keycode).unwrap_or(Keysym(0)).0,
+            self.keycode_to_string(keycode),
+            state,
+            self.keys_down
+                .iter()
+                .map(|&k| self.keycode_to_string(k))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    #[allow(non_upper_case_globals)]
+    fn handle_xrecord_event(&mut self, event: &RawEvent) {
+        match event.code as c_int {
+            KeyPress => {
+                let code = Keycode(event.detail);
+                self.keys_down.insert(code);
+                self.write_key("KeyPress", code, event.state);
+            }
+            KeyRelease => {
+                let code = Keycode(event.detail);
+                self.keys_down.remove(&code);
+                self.write_key("KeyRelease", code, event.state);
+            }
+            ButtonPress => {
+                println!("ButtonPress: {} {:x}", event.detail, event.state);
+            }
+            _ => {
+                println!("event type: {:?}", event);
+            }
+        }
+    }
+}
+
 unsafe extern "C" fn callback(app_state: *mut i8, data: *mut XRecordInterceptData) {
-    let app_state = &mut *(app_state as *mut AppState);
     let data = &mut *data;
     if data.category != XRecordFromServer || data.client_swapped != 0 || data.data_len == 0 {
         return;
     }
-
+    let app_state = &mut *(app_state as *mut AppState);
     let event = &*(data.data as *const RawEvent);
     debug_assert_eq!((data.data_len * 4) as usize, size_of_val(event));
-    match event.code as c_int {
-        KeyPress => {
-            app_state.write_key("KeyPress", event.detail, event.state);
-        }
-        KeyRelease => {
-            app_state.write_key("KeyRelease", event.detail, event.state);
-        }
-        ButtonPress => {
-            println!("ButtonPress: {} {:x}", event.detail, event.state);
-        }
-        _ => {
-            println!("event type: {:?}", event);
-        }
-    }
-
+    app_state.handle_xrecord_event(event);
     XRecordFreeData(data as *mut _);
 }
 
@@ -91,7 +133,8 @@ fn main() {
 
         let mut app_state = AppState {
             main_display,
-            record_display,
+            _record_display: record_display,
+            keys_down: Default::default(),
         };
 
         let mut clients = [XRecordAllClients];
