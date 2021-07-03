@@ -3,9 +3,11 @@
 
 // use x_interface::*;
 
+use libc::{c_int, c_uchar};
+use std::ffi::{CStr, CString};
 use std::mem::size_of_val;
-use std::os::raw::c_int;
-use std::ptr::{null, null_mut};
+use std::ptr::null;
+use x11::xlib::{Display, XKeycodeToKeysym, XKeysymToString};
 use x11::{
     xlib::{ButtonPress, KeyPress, KeyRelease, XOpenDisplay},
     xrecord::*,
@@ -31,8 +33,30 @@ struct RawEvent {
     unused: u8,
 }
 
+struct AppState {
+    main_display: *mut Display,
+    record_display: *mut Display,
+}
+
+impl AppState {
+    unsafe fn write_key(&self, label: &str, keycode: c_uchar, state: u16) {
+        let keysym = XKeycodeToKeysym(self.main_display, keycode, 0);
+        let keysym_str = XKeysymToString(keysym);
+        let keysym_str = (!keysym_str.is_null()).then(|| CStr::from_ptr(keysym_str).to_owned());
+        println!(
+            "{}: code={}, sym={} ({:?}), state={}",
+            label,
+            keycode,
+            keysym,
+            keysym_str.unwrap_or_else(|| CString::new("???").expect("conversion failed")),
+            state
+        );
+    }
+}
+
 #[allow(non_upper_case_globals)]
-unsafe extern "C" fn callback(_closure: *mut i8, data: *mut XRecordInterceptData) {
+unsafe extern "C" fn callback(app_state: *mut i8, data: *mut XRecordInterceptData) {
+    let app_state = &mut *(app_state as *mut AppState);
     let data = &mut *data;
     if data.category != XRecordFromServer || data.client_swapped != 0 || data.data_len == 0 {
         return;
@@ -42,10 +66,10 @@ unsafe extern "C" fn callback(_closure: *mut i8, data: *mut XRecordInterceptData
     debug_assert_eq!((data.data_len * 4) as usize, size_of_val(event));
     match event.code as c_int {
         KeyPress => {
-            println!("KeyPress: {} {:x}", event.detail, event.state);
+            app_state.write_key("KeyPress", event.detail, event.state);
         }
         KeyRelease => {
-            println!("KeyPress: {} {:x}", event.detail, event.state);
+            app_state.write_key("KeyRelease", event.detail, event.state);
         }
         ButtonPress => {
             println!("ButtonPress: {} {:x}", event.detail, event.state);
@@ -62,7 +86,14 @@ fn main() {
     println!("Hello, world!");
 
     unsafe {
-        let display = XOpenDisplay(null());
+        let main_display = XOpenDisplay(null());
+        let record_display = XOpenDisplay(null());
+
+        let mut app_state = AppState {
+            main_display,
+            record_display,
+        };
+
         let mut clients = [XRecordAllClients];
         let range = XRecordAllocRange();
         *range = XRecordRange {
@@ -87,14 +118,20 @@ fn main() {
         };
         let mut ranges = [range];
         let context = XRecordCreateContext(
-            display,
+            record_display,
             0,
             &mut clients[0],
             clients.len() as i32,
             &mut ranges[0],
             ranges.len() as i32,
         );
-        let _result = XRecordEnableContext(display, context, Some(callback), null_mut());
+        let _result = XRecordEnableContext(
+            record_display,
+            context,
+            Some(callback),
+            &mut app_state as *mut _ as *mut i8,
+        );
+        println!("done");
         //assert_eq!(result, 0);
     }
 }
