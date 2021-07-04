@@ -1,0 +1,12 @@
+{
+  // paste: 200
+  // undo: 201
+  // cut: 198
+  // copy: 199
+  // alt delete: 197
+  rules: [
+    {
+      key:
+    }
+  ]
+}

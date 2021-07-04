@@ -4,22 +4,25 @@
 
 // use x_interface::*;
 
-use libc::{c_int, c_uchar, c_uint, c_ulong, fd_set, timeval, FD_CLR, FD_ISSET, FD_SET, FD_ZERO};
+use libc::{c_int, c_uint, FD_ISSET, FD_SET, FD_ZERO};
 use std::cmp::max;
 use std::collections::BTreeSet;
-use std::ffi::CStr;
+use std::convert::TryFrom;
 use std::mem::{size_of_val, MaybeUninit};
 use std::ptr::{null, null_mut};
 use x11::xlib::{
     CreateNotify, Display, GrabModeAsync, StructureNotifyMask, SubstructureNotifyMask, Window,
-    XConnectionNumber, XDefaultRootWindow, XFree, XGrabKey, XKeycodeToKeysym, XKeysymToString,
-    XNextEvent, XQueryTree, XSelectInput,
+    XConnectionNumber, XDefaultRootWindow, XFree, XFreeModifiermap, XGetModifierMapping, XGrabKey,
+    XKeycodeToKeysym, XNextEvent, XQueryTree, XSelectInput,
 };
 use x11::xtest::XTestFakeKeyEvent;
 use x11::{
     xlib::{ButtonPress, KeyPress, KeyRelease, XOpenDisplay},
     xrecord::*,
 };
+
+mod key;
+use key::*;
 
 // https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#Encoding::Events
 #[derive(Debug)]
@@ -41,22 +44,6 @@ struct RawEvent {
     unused: u8,
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
-struct Keycode(c_uchar);
-
-#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
-struct Keysym(c_ulong);
-
-impl Keysym {
-    fn to_c_str(&self) -> Option<&'static CStr> {
-        unsafe {
-            XKeysymToString(self.0)
-                .as_ref()
-                .map(|ptr| CStr::from_ptr(ptr))
-        }
-    }
-}
-
 struct AppState {
     main_display: *mut Display,
     _record_display: *mut Display,
@@ -66,26 +53,28 @@ struct AppState {
 impl AppState {
     fn keycode_to_keysym(&self, keycode: Keycode) -> Option<Keysym> {
         unsafe {
-            match XKeycodeToKeysym(self.main_display, keycode.0, 0) {
+            match XKeycodeToKeysym(self.main_display, keycode.value(), 0) {
                 0 => None,
-                n => Some(Keysym(n)),
+                n => Some(Keysym::from(n)),
             }
         }
     }
 
     fn keycode_to_string(&self, keycode: Keycode) -> String {
         self.keycode_to_keysym(keycode)
-            .and_then(|k| k.to_c_str())
-            .map(|s| format!("<{}>", s.to_string_lossy()))
-            .unwrap_or_else(|| format!("<keycode_{}>", keycode.0))
+            .and_then(|k| k.to_string())
+            .map(|s| format!("<{}>", s))
+            .unwrap_or_else(|| format!("<keycode_{}>", keycode.value()))
     }
 
     fn write_key(&self, label: &str, keycode: Keycode, state: u16) {
         println!(
             "{}: code={}, sym={} ({:?}), state={}, down=[{}]",
             label,
-            keycode.0,
-            self.keycode_to_keysym(keycode).unwrap_or(Keysym(0)).0,
+            keycode.value(),
+            self.keycode_to_keysym(keycode)
+                .map(|k| k.value())
+                .unwrap_or(0),
             self.keycode_to_string(keycode),
             state,
             self.keys_down
@@ -99,25 +88,37 @@ impl AppState {
     fn handle_xrecord_event(&mut self, event: &RawEvent) {
         match event.code as c_int {
             KeyPress => {
-                let code = Keycode(event.detail);
-                self.keys_down.insert(code);
-                self.write_key("KeyPress", code, event.state);
+                if let Ok(code) = Keycode::try_from(event.detail) {
+                    self.keys_down.insert(code);
+                    self.write_key("KeyPress", code, event.state);
+                }
             }
             KeyRelease => {
-                let code = Keycode(event.detail);
-                self.keys_down.remove(&code);
-                self.write_key("KeyRelease", code, event.state);
-                if code.0 == 52 && event.state == 0xc {
-                    let press = 1;
-                    let release = 0;
-                    unsafe {
-                        for key in self.keys_down.iter() {
-                            XTestFakeKeyEvent(self.main_display, key.0 as c_uint, release, 0);
-                        }
-                        XTestFakeKeyEvent(self.main_display, 52, press, 0);
-                        XTestFakeKeyEvent(self.main_display, 52, release, 0);
-                        for key in self.keys_down.iter() {
-                            XTestFakeKeyEvent(self.main_display, key.0 as c_uint, press, 0);
+                if let Ok(code) = Keycode::try_from(event.detail) {
+                    self.keys_down.remove(&code);
+                    self.write_key("KeyRelease", code, event.state);
+                    if code == 52 && event.state == 0xc {
+                        let press = 1;
+                        let release = 0;
+                        unsafe {
+                            for &key in self.keys_down.iter() {
+                                XTestFakeKeyEvent(
+                                    self.main_display,
+                                    key.value() as c_uint,
+                                    release,
+                                    0,
+                                );
+                            }
+                            XTestFakeKeyEvent(self.main_display, 52, press, 0);
+                            XTestFakeKeyEvent(self.main_display, 52, release, 0);
+                            for &key in self.keys_down.iter() {
+                                XTestFakeKeyEvent(
+                                    self.main_display,
+                                    key.value() as c_uint,
+                                    press,
+                                    0,
+                                );
+                            }
                         }
                     }
                 }
@@ -191,6 +192,19 @@ fn main() {
 
     let main_display = unsafe { XOpenDisplay(null()) };
     let record_display = unsafe { XOpenDisplay(null()) };
+    unsafe {
+        let mapping = &mut *XGetModifierMapping(main_display);
+        let mut ptr = mapping.modifiermap;
+        for mod_id in Modifier::values() {
+            for _ in 0..mapping.max_keypermod {
+                if let Ok(code) = Keycode::try_from(*ptr) {
+                    println!("mod: {:?}, code: {}", mod_id, code.value());
+                }
+                ptr = ptr.add(1);
+            }
+        }
+        XFreeModifiermap(mapping);
+    }
 
     let mut app_state = AppState {
         main_display,
