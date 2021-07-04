@@ -1,0 +1,36 @@
+{
+  mappings: [
+    {
+      // delete
+      input: 197,
+      output: [['Delete']],
+    },
+    {
+      // cut
+      input: 198,
+      output: [['Control_L', 'x']],
+    },
+    {
+      // copy
+      input: 199,
+      output: [['Control_L', 'c']],
+    },
+    {
+      // paste
+      input: 200,
+      output: [['Control_L', 'v']],
+    },
+    {
+      // undo
+      input: 201,
+      output: [['Control_L', 'z']],
+    },
+    // {
+    //   // paste
+    //   shift: true,
+    //   ctrl: false,
+    //   input: 200,
+    //   output: [["Shift", 'Ctrl', 'v']],
+    // },
+  ]
+}

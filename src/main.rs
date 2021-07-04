@@ -1,19 +1,22 @@
-#![allow(non_upper_case_globals)]
+#![allow(non_upper_case_global)]
 // mod x_interface;
 // mod xcb_ext;
 
 // use x_interface::*;
 
-use libc::{c_int, c_uint, FD_ISSET, FD_SET, FD_ZERO};
+use config::KeyMapping;
+use enumset::EnumSet;
+use libc::{c_int, c_uint, c_ulong, c_void, FD_ISSET, FD_SET, FD_ZERO};
 use std::cmp::max;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
 use std::mem::{size_of_val, MaybeUninit};
 use std::ptr::{null, null_mut};
 use x11::xlib::{
-    CreateNotify, Display, GrabModeAsync, StructureNotifyMask, SubstructureNotifyMask, Window,
-    XConnectionNumber, XDefaultRootWindow, XFree, XFreeModifiermap, XGetModifierMapping, XGrabKey,
-    XKeycodeToKeysym, XNextEvent, XQueryTree, XSelectInput,
+    CreateNotify, Display, GrabModeAsync, NoSymbol, StructureNotifyMask, SubstructureNotifyMask,
+    Window, XConnectionNumber, XDefaultRootWindow, XDisplayKeycodes, XFree, XFreeModifiermap,
+    XGetKeyboardMapping, XGetModifierMapping, XGrabKey, XKeycodeToKeysym, XKeysymToKeycode,
+    XNextEvent, XQueryTree, XSelectInput,
 };
 use x11::xtest::XTestFakeKeyEvent;
 use x11::{
@@ -21,8 +24,12 @@ use x11::{
     xrecord::*,
 };
 
+mod config;
 mod key;
+
 use key::*;
+
+use crate::config::{Config, KeySpec};
 
 // https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#Encoding::Events
 #[derive(Debug)]
@@ -48,16 +55,67 @@ struct AppState {
     main_display: *mut Display,
     _record_display: *mut Display,
     keys_down: BTreeSet<Keycode>,
+    config: Config,
+    keysym_to_keycode: HashMap<Keysym, Keycode>,
+    keycode_to_keysyms: HashMap<Keycode, Vec<Keysym>>,
 }
 
 impl AppState {
-    fn keycode_to_keysym(&self, keycode: Keycode) -> Option<Keysym> {
+    fn keysym_to_keycode(&self, keysym: Keysym) -> Option<Keycode> {
+        // unsafe {
+        //     match XKeysymToKeycode(self.main_display, keysym.value()) {
+        //         0 => None,
+        //         n => Some(KeyCode::from(n)),
+        //     }
+        // }
+
+        // }
+        self.keysym_to_keycode.get(&keysym).copied()
+    }
+
+    fn get_keyboard_mapping(&mut self) {
         unsafe {
-            match XKeycodeToKeysym(self.main_display, keycode.value(), 0) {
-                0 => None,
-                n => Some(Keysym::from(n)),
+            let mut min_keycode = 0;
+            let mut max_keycode = 0;
+            XDisplayKeycodes(self.main_display, &mut min_keycode, &mut max_keycode);
+            let mut keysyms_per_keycode = 0;
+            let keysyms = XGetKeyboardMapping(
+                self.main_display,
+                min_keycode as u8,
+                max_keycode - min_keycode + 1,
+                &mut keysyms_per_keycode,
+            );
+            let mut ptr = keysyms;
+            self.keysym_to_keycode.clear();
+            self.keycode_to_keysyms.clear();
+            for keycode in min_keycode..=max_keycode {
+                let keycode = Keycode::try_from(keycode as u8).expect("invalid keycode");
+                for _ in 0..keysyms_per_keycode {
+                    let keysym = *ptr;
+                    ptr = ptr.add(1);
+                    if keysym != NoSymbol as c_ulong {
+                        let keysym = Keysym::from(keysym);
+                        self.keysym_to_keycode.insert(keysym, keycode);
+                        self.keycode_to_keysyms
+                            .entry(keycode)
+                            .or_default()
+                            .push(keysym);
+                    }
+                }
             }
+            XFree(keysyms as *mut _);
         }
+    }
+
+    fn keycode_to_keysym(&self, keycode: Keycode) -> Option<Keysym> {
+        self.keycode_to_keysyms.get(&keycode).map(|v| v[0])
+        // unsafe {
+        //     let index = 0; // TODO
+        //     match XKeycodeToKeysym(self.main_display, keycode.value(), index) {
+        //         0 => None,
+        //         n => Some(Keysym::from(n)),
+        //     }
+        // }
     }
 
     fn keycode_to_string(&self, keycode: Keycode) -> String {
@@ -195,10 +253,10 @@ fn main() {
     unsafe {
         let mapping = &mut *XGetModifierMapping(main_display);
         let mut ptr = mapping.modifiermap;
-        for mod_id in Modifier::values() {
+        for modifier in EnumSet::<Modifier>::all().iter() {
             for _ in 0..mapping.max_keypermod {
                 if let Ok(code) = Keycode::try_from(*ptr) {
-                    println!("mod: {:?}, code: {}", mod_id, code.value());
+                    println!("mod: {:?}, code: {}", modifier, code.value());
                 }
                 ptr = ptr.add(1);
             }
@@ -206,11 +264,31 @@ fn main() {
         XFreeModifiermap(mapping);
     }
 
+    let mut config: Config = json5::from_str(include_str!("config.json5")).unwrap();
+
     let mut app_state = AppState {
         main_display,
         _record_display: record_display,
         keys_down: Default::default(),
+        config: Default::default(),
+        keysym_to_keycode: Default::default(),
+        keycode_to_keysyms: Default::default(),
     };
+
+    app_state.get_keyboard_mapping();
+
+    config.visit_keyspecs(|k| match k {
+        KeySpec::Code(_) => {}
+        KeySpec::Sym(s) => {
+            *k = KeySpec::Code(
+                app_state
+                    .keysym_to_keycode(s.parse().expect("invalid key name"))
+                    .expect("invalid keysym")
+                    .value() as i32,
+            );
+        }
+    });
+    dbg!(&config);
 
     let mut clients = [XRecordAllClients];
     let range = unsafe { &mut *XRecordAllocRange() };

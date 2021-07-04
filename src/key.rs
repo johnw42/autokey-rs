@@ -1,3 +1,9 @@
+use enumset::{EnumSet, EnumSetType};
+use libc::c_ulong;
+use serde::{
+    de::{Error, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 use std::{
     borrow::Cow,
     convert::TryFrom,
@@ -6,11 +12,9 @@ use std::{
     num::NonZeroU8,
     str::FromStr,
 };
-
-use libc::c_ulong;
 use x11::xlib::{NoSymbol, XKeysymToString, XStringToKeysym};
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug, Hash)]
 pub struct Keycode(NonZeroU8);
 
 impl Keycode {
@@ -33,7 +37,7 @@ impl PartialEq<u8> for Keycode {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug, Hash)]
 pub struct Keysym(c_ulong);
 
 impl Keysym {
@@ -74,25 +78,44 @@ impl FromStr for Keysym {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Modifier(i32);
-
-const MODIFIER_NAMES: [&str; 8] = [
-    "Shift", "CapsLock", "Ctrl", "Alt", "NumLock", "Mod3", "Super", "Mod5",
-];
-
-impl Modifier {
-    pub fn values() -> Vec<Modifier> {
-        (0..8).map(Modifier).collect()
-    }
-
-    fn to_str(self) -> &'static str {
-        MODIFIER_NAMES[self.0 as usize]
-    }
+#[derive(Debug, EnumSetType, Deserialize, Serialize)]
+#[enumset(serialize_as_list)]
+#[serde(rename_all = "lowercase")]
+pub enum Modifier {
+    Shift,
+    CapsLock,
+    Ctrl,
+    Alt,
+    NumLock,
+    Mod3,
+    Super,
+    Mod5,
 }
 
-impl Debug for Modifier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.to_str())
-    }
-}
+// struct ModifierVisitor;
+
+// impl<'de> Visitor<'de> for ModifierVisitor {
+//     type Value = Modifier;
+
+//     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+//         formatter.write_str("a modifier")
+//     }
+
+//     fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+//     where
+//         E: Error,
+//     {
+//         for m in EnumSet::<Modifier>::all().into_iter() {
+//             if
+//         }
+//     }
+// }
+
+// impl<'de> Deserialize<'de> for Modifier {
+//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+//     where
+//         D: Deserializer<'de>,
+//     {
+//         deserializer.deserialize_str(ModifierVisitor)
+//     }
+// }
