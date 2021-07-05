@@ -6,7 +6,6 @@ use log::{debug, info};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::convert::TryFrom;
-use std::rc::Rc;
 
 use x11::xlib::{ButtonPress, KeyPress, KeyRelease, XEvent};
 use x11::xlib::{CreateNotify, Window};
@@ -20,15 +19,15 @@ use key::*;
 use crate::config::KeySpec;
 use crate::display::RecordingDisplay;
 
-struct AppState {
-    display: Rc<Display>,
+struct AppState<'d> {
+    display: &'d Display,
     _keys_down: BTreeSet<Keycode>,
     config: Config,
     keyboard_mapping: KeyboardMapping,
     _modifiers: EnumSet<Modifier>,
 }
 
-impl AppState {
+impl<'d> AppState<'d> {
     fn _keysym_to_keycode(&self, keysym: Keysym) -> Option<Keycode> {
         self.keyboard_mapping
             .keysym_to_keycode
@@ -72,7 +71,7 @@ impl AppState {
         );
     }
 
-    fn handle_xrecord_event(&mut self, event: &RecordedEvent) {
+    fn handle_recorded_event(&mut self, event: &RecordedEvent) {
         #[allow(non_upper_case_globals)]
         match event.code as c_int {
             KeyPress => {
@@ -121,13 +120,7 @@ impl AppState {
     }
 
     fn grab_keys_for_window(&mut self, window: Window) {
-        info!("starting traversal at window; {}", window);
-        //sleep(Duration::from_millis(200));
         self.display.visit_window_tree(window, &mut |child| {
-            info!("visiting window: {}", child);
-            //sleep(Duration::from_millis(200));
-            // let s = self;
-            // let child = window;
             self.config.visit_key_mappings(&|k| match k.input {
                 KeySpec::Code(c) => {
                     self.display.grab_key(
@@ -153,59 +146,45 @@ impl AppState {
             }
         }
     }
+
+    fn run() {
+        let display = Display::new();
+
+        let config = json5::from_str(include_str!("config.json5")).unwrap();
+        info!("config: {:?}", config);
+        let keyboard_mapping = display.get_keyboard_mapping();
+
+        let mut state = AppState {
+            display: &display,
+            _keys_down: Default::default(),
+            config,
+            keyboard_mapping,
+            _modifiers: Default::default(),
+        };
+        state.get_keyboard_mapping();
+
+        // config.visit_keyspecs(|k| match k {
+        //     KeySpec::Code(_) => {}
+        //     KeySpec::Sym(s) => {
+        //         *k = KeySpec::Code(
+        //             app_state
+        //                 .keysym_to_keycode(s.parse().expect("invalid key name"))
+        //                 .expect("invalid keysym")
+        //                 .value() as i32,
+        //         );
+        //     }
+        // });
+
+        let state = RefCell::new(state);
+        let record_display =
+            RecordingDisplay::new(|event| state.borrow_mut().handle_recorded_event(event));
+        display.event_loop(&record_display, |event| {
+            state.borrow_mut().handle_xevent(event)
+        })
+    }
 }
 
 fn main() {
     env_logger::init();
-
-    let main_display = Display::new();
-    // unsafe {
-    //     let mapping = &mut *XGetModifierMapping(main_display);
-    //     let mut ptr = mapping.modifiermap;
-    //     for modifier in EnumSet::<Modifier>::all().iter() {
-    //         for _ in 0..mapping.max_keypermod {
-    //             if let Ok(code) = Keycode::try_from(*ptr) {
-    //                 println!("mod: {:?}, code: {}", modifier, code.value());
-    //             }
-    //             ptr = ptr.add(1);
-    //         }
-    //     }
-    //     XFreeModifiermap(mapping);
-    // }
-
-    let config = json5::from_str(include_str!("config.json5")).unwrap();
-
-    let mut app_state = AppState {
-        display: Rc::new(main_display),
-        _keys_down: Default::default(),
-        config: Default::default(),
-        keyboard_mapping: Default::default(),
-        _modifiers: Default::default(),
-    };
-
-    app_state.get_keyboard_mapping();
-
-    // config.visit_keyspecs(|k| match k {
-    //     KeySpec::Code(_) => {}
-    //     KeySpec::Sym(s) => {
-    //         *k = KeySpec::Code(
-    //             app_state
-    //                 .keysym_to_keycode(s.parse().expect("invalid key name"))
-    //                 .expect("invalid keysym")
-    //                 .value() as i32,
-    //         );
-    //     }
-    // });
-    info!("config: {:?}", config);
-
-    app_state.config = config;
-    //app_state.start_recording();
-
-    let display = app_state.display.clone();
-    let app_state = RefCell::new(app_state);
-    let record_display =
-        RecordingDisplay::new(|event| app_state.borrow_mut().handle_xrecord_event(event));
-    display.event_loop(&record_display, |event| {
-        app_state.borrow_mut().handle_xevent(event)
-    })
+    AppState::run();
 }
