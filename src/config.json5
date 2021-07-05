@@ -1,5 +1,5 @@
 {
-  mappings: [
+  items: [
     {
       // delete
       input: 197,
@@ -25,6 +25,24 @@
       input: 201,
       output: [['Control_L', 'z']],
     },
+    {
+      window_title: 'Google Chrome',
+      contents: [
+        {
+          ctrl: true,
+          shift: false,
+          input: 'w',
+          output: [],
+        },
+        {
+          ctrl: true,
+          shift: true,
+          input: 'w',
+          output: [['Control_L', 'w']],
+        },
+      ],
+    },
+
     // {
     //   // paste
     //   shift: true,

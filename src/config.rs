@@ -95,6 +95,8 @@ impl Default for ModSpec {
 #[derive(Debug, Deserialize)]
 pub struct KeyMapping {
     #[serde(flatten)]
+    pub conditions: Conditions,
+    #[serde(flatten)]
     pub mods: ModSpec,
     pub input: KeySpec,
     pub output: Vec<Vec<KeySpec>>,
@@ -111,8 +113,27 @@ impl KeyMapping {
 }
 
 #[derive(Debug, Deserialize, Default)]
+pub struct Conditions {
+    pub window_title: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct Group {
+    #[serde(flatten)]
+    pub conditions: Conditions,
+    pub contents: Vec<Item>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Item {
+    KeyMapping(KeyMapping),
+    Group(Group),
+}
+
+#[derive(Debug, Deserialize, Default)]
 pub struct Config {
-    pub mappings: Vec<KeyMapping>,
+    pub items: Vec<Item>,
 }
 
 impl Config {
@@ -120,6 +141,6 @@ impl Config {
     where
         F: Fn(&mut KeySpec),
     {
-        self.mappings.iter_mut().for_each(|m| m.visit_keyspecs(&f))
+        //self.mappings.iter_mut().for_each(|m| m.visit_keyspecs(&f))
     }
 }
