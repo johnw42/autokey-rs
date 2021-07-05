@@ -17,5 +17,6 @@ x11 = { version="^2.18.1", features=["xrecord"] }
 # num-derive = "^0.3.3"
 # derive_more = "^0.99.14"
 enumset = { version="^1.0.6", features=["serde"] }
-json5 = "0.3.0"
-log = "0.4.14"
+json5 = "^0.3.0"
+log = "^0.4.14"
+env_logger = "^0.8.4"

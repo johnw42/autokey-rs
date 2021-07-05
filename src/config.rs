@@ -130,9 +130,37 @@ pub struct ConfigItem {
     body: ItemBody,
 }
 
+impl ConfigItem {
+    pub fn visit_key_mappings<F>(&self, f: &F)
+    where
+        F: Fn(&KeyMapping),
+    {
+        if self.enabled {
+            match &self.body {
+                ItemBody::KeyMapping(m) => f(m),
+                ItemBody::Group { contents } => {
+                    contents.iter().for_each(|item| item.visit_key_mappings(f))
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum ItemBody {
     KeyMapping(KeyMapping),
     Group { contents: Vec<ConfigItem> },
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct Config(Vec<ConfigItem>);
+
+impl Config {
+    pub fn visit_key_mappings<F>(&self, f: &F)
+    where
+        F: Fn(&KeyMapping),
+    {
+        self.0.iter().for_each(|item| item.visit_key_mappings(f))
+    }
 }

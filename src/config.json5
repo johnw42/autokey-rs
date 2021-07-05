@@ -1,7 +1,20 @@
 [
   {
+    name: "swap 6/7",
+    contents: [
+      {
+        input: 15,
+        output: 16,
+      },
+      {
+        input: 16,
+        output: 15,
+      },
+    ]
+  },
+  {
     name: 'CLEAVE',
-    enabled: true,
+    enabled: false,
     contents: [
       {
         name: 'Untab',
@@ -38,6 +51,7 @@
   {
     name: 'Chrome hotkeys',
     window_title: 'Google Chrome',
+    enabled: false,
     contents: [
       {
         ctrl: true,

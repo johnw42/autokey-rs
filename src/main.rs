@@ -4,6 +4,7 @@
 
 // use x_interface::*;
 
+use config::Config;
 use enumset::EnumSet;
 use libc::{c_int, c_uint, c_ulong, FD_ISSET, FD_SET, FD_ZERO};
 use log::{info, trace};
@@ -12,10 +13,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
 use std::mem::{size_of_val, MaybeUninit};
 use std::ptr::{null, null_mut};
+use std::thread::sleep;
+use std::time::Duration;
 use x11::xlib::{
-    CreateNotify, Display, GrabModeAsync, NoSymbol, StructureNotifyMask, SubstructureNotifyMask,
-    Window, XConnectionNumber, XDefaultRootWindow, XDisplayKeycodes, XFree, XFreeModifiermap,
-    XGetKeyboardMapping, XGetModifierMapping, XGrabKey, XNextEvent, XQueryTree, XSelectInput,
+    AnyModifier, CreateNotify, Display, GrabModeAsync, NoSymbol, StructureNotifyMask,
+    SubstructureNotifyMask, Window, XConnectionNumber, XDefaultRootWindow, XDisplayKeycodes, XFree,
+    XFreeModifiermap, XGetKeyboardMapping, XGetModifierMapping, XGrabKey, XNextEvent, XQueryTree,
+    XSelectInput,
 };
 use x11::xtest::XTestFakeKeyEvent;
 use x11::{
@@ -50,10 +54,15 @@ struct RawEvent {
     unused: u8,
 }
 
+struct Connection {
+    display: *mut Display,
+}
+
 struct AppState {
     display: *mut Display,
+    record_display: *mut Display,
     keys_down: BTreeSet<Keycode>,
-    config: Vec<ConfigItem>,
+    config: Config,
     keysym_to_keycode: HashMap<Keysym, Keycode>,
     keycode_to_keysyms: HashMap<Keycode, Vec<Keysym>>,
     modifiers: EnumSet<Modifier>,
@@ -67,14 +76,6 @@ enum KeyEvent {
 
 impl AppState {
     fn keysym_to_keycode(&self, keysym: Keysym) -> Option<Keycode> {
-        // unsafe {
-        //     match XKeysymToKeycode(self.main_display, keysym.value()) {
-        //         0 => None,
-        //         n => Some(KeyCode::from(n)),
-        //     }
-        // }
-
-        // }
         self.keysym_to_keycode.get(&keysym).copied()
     }
 
@@ -114,13 +115,6 @@ impl AppState {
 
     fn keycode_to_keysym(&self, keycode: Keycode) -> Option<Keysym> {
         self.keycode_to_keysyms.get(&keycode).map(|v| v[0])
-        // unsafe {
-        //     let index = 0; // TODO
-        //     match XKeycodeToKeysym(self.main_display, keycode.value(), index) {
-        //         0 => None,
-        //         n => Some(Keysym::from(n)),
-        //     }
-        // }
     }
 
     fn keycode_to_string(&self, keycode: Keycode) -> String {
@@ -130,7 +124,7 @@ impl AppState {
             .unwrap_or_else(|| format!("<keycode_{}>", keycode.value()))
     }
 
-    fn write_key(&self, label: &str, keycode: Keycode, state: u16) {
+    fn log_key(&self, label: &str, keycode: Keycode, state: u16) {
         trace!(
             "{}: code={}, sym={} ({:?}), state={}, down=[{}]",
             label,
@@ -167,13 +161,13 @@ impl AppState {
             KeyPress => {
                 if let Ok(code) = Keycode::try_from(event.detail) {
                     self.keys_down.insert(code);
-                    self.write_key("KeyPress", code, event.state);
+                    self.log_key("KeyPress", code, event.state);
                 }
             }
             KeyRelease => {
                 if let Ok(code) = Keycode::try_from(event.detail) {
                     self.keys_down.remove(&code);
-                    self.write_key("KeyRelease", code, event.state);
+                    self.log_key("KeyRelease", code, event.state);
                     // if code == 52 && event.state == 0xc {
                     //     let press = 1;
                     //     let release = 0;
@@ -213,12 +207,15 @@ impl AppState {
     where
         F: FnMut(&mut Self, Window),
     {
-        f(self, window);
+        info!("visiting {}", window);
+        //sleep(Duration::from_millis(200));
         unsafe {
             let mut root = 0;
             let mut parent = 0;
             let mut children = null_mut();
             let mut num_children = 0;
+            info!("querying tree of {}", window);
+            //sleep(Duration::from_millis(200));
             if XQueryTree(
                 self.display,
                 window,
@@ -235,20 +232,143 @@ impl AppState {
                 XFree(children as *mut _);
             }
         }
+        f(self, window);
     }
 
-    fn grab_keys(&mut self, window: Window) {
-        self.visit_window_tree(window, &mut |self_, child| unsafe {
+    fn grab_key(&self, window: Window, keycode: Keycode, modifiers: Option<EnumSet<Modifier>>) {
+        let keycode = keycode.value().into();
+        let modifiers = modifiers.map_or(AnyModifier, |s| s.as_u8().into());
+        let owner_events = 1;
+        let pointer_mode = GrabModeAsync;
+        let keyboard_mode = GrabModeAsync;
+        //info!("grabbing key {} at window {}", keycode, window);
+        //sleep(Duration::from_millis(200));
+        unsafe {
             XGrabKey(
-                self_.display,
-                52,
-                0xc,
-                child,
-                0,
-                GrabModeAsync,
-                GrabModeAsync,
+                self.display,
+                keycode,
+                modifiers,
+                window,
+                owner_events,
+                pointer_mode,
+                keyboard_mode,
             );
+        }
+    }
+
+    fn grab_keys_for_window(&mut self, window: Window) {
+        info!("starting traversal at window; {}", window);
+        //sleep(Duration::from_millis(200));
+        self.visit_window_tree(window, &mut |s, child| {
+            info!("visiting window: {}", child);
+            //sleep(Duration::from_millis(200));
+            // let s = self;
+            // let child = window;
+            s.config.visit_key_mappings(&|k| match k.input {
+                KeySpec::Code(c) => {
+                    s.grab_key(
+                        child,
+                        Keycode::try_from(c as u8).expect("invalid keycode"),
+                        None,
+                    );
+                }
+                KeySpec::Sym(_) => {}
+            })
         });
+    }
+
+    fn start_recording(&mut self) {
+        assert!(self.record_display.is_null());
+
+        self.record_display = unsafe { XOpenDisplay(null()) };
+
+        let mut clients = [XRecordAllClients];
+        let range = unsafe { &mut *XRecordAllocRange() };
+        *range = XRecordRange {
+            core_requests: XRecordRange8 { first: 0, last: 0 },
+            core_replies: XRecordRange8 { first: 0, last: 0 },
+            ext_requests: XRecordExtRange {
+                ext_major: XRecordRange8 { first: 0, last: 0 },
+                ext_minor: XRecordRange16 { first: 0, last: 0 },
+            },
+            ext_replies: XRecordExtRange {
+                ext_major: XRecordRange8 { first: 0, last: 0 },
+                ext_minor: XRecordRange16 { first: 0, last: 0 },
+            },
+            delivered_events: XRecordRange8 { first: 0, last: 0 },
+            device_events: XRecordRange8 {
+                first: KeyPress as u8,
+                last: ButtonPress as u8,
+            },
+            errors: XRecordRange8 { first: 0, last: 0 },
+            client_started: 0,
+            client_died: 0,
+        };
+        let mut ranges = [range as *mut _];
+        unsafe {
+            let context = XRecordCreateContext(
+                self.record_display,
+                0,
+                &mut clients[0],
+                clients.len() as i32,
+                &mut ranges[0],
+                ranges.len() as i32,
+            );
+            assert_ne!(
+                0,
+                XRecordEnableContextAsync(
+                    self.record_display,
+                    context,
+                    Some(xrecord_callback),
+                    self as *mut _ as *mut i8,
+                )
+            );
+        }
+    }
+
+    fn event_loop(&mut self) {
+        unsafe {
+            let root_window = XDefaultRootWindow(self.display);
+            self.grab_keys_for_window(root_window);
+
+            XSelectInput(
+                self.display,
+                root_window,
+                StructureNotifyMask | SubstructureNotifyMask,
+            );
+
+            let main_fd = XConnectionNumber(self.display);
+            let record_fd = XConnectionNumber(self.record_display);
+            loop {
+                let mut readfs = MaybeUninit::uninit();
+                FD_ZERO(readfs.as_mut_ptr());
+                let mut readfds = readfs.assume_init();
+                FD_SET(main_fd, &mut readfds);
+                FD_SET(record_fd, &mut readfds);
+                libc::select(
+                    max(dbg!(main_fd), dbg!(record_fd)) + 1,
+                    &mut readfds,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                );
+                if FD_ISSET(record_fd, &mut readfds) {
+                    XRecordProcessReplies(self.record_display);
+                }
+                if FD_ISSET(main_fd, &mut readfds) {
+                    let mut event = MaybeUninit::uninit();
+                    XNextEvent(self.display, event.as_mut_ptr());
+                    let event = event.assume_init();
+                    match event.any.type_ as c_int {
+                        CreateNotify => {
+                            let event = event.create_window;
+                            self.grab_keys_for_window(event.window);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -265,8 +385,9 @@ unsafe extern "C" fn xrecord_callback(app_state: *mut i8, data: *mut XRecordInte
 }
 
 fn main() {
+    env_logger::init();
+
     let main_display = unsafe { XOpenDisplay(null()) };
-    let record_display = unsafe { XOpenDisplay(null()) };
     unsafe {
         let mapping = &mut *XGetModifierMapping(main_display);
         let mut ptr = mapping.modifiermap;
@@ -285,6 +406,7 @@ fn main() {
 
     let mut app_state = AppState {
         display: main_display,
+        record_display: null_mut(),
         keys_down: Default::default(),
         config: Default::default(),
         keysym_to_keycode: Default::default(),
@@ -308,87 +430,6 @@ fn main() {
     info!("config: {:?}", config);
 
     app_state.config = config;
-
-    let mut clients = [XRecordAllClients];
-    let range = unsafe { &mut *XRecordAllocRange() };
-    *range = XRecordRange {
-        core_requests: XRecordRange8 { first: 0, last: 0 },
-        core_replies: XRecordRange8 { first: 0, last: 0 },
-        ext_requests: XRecordExtRange {
-            ext_major: XRecordRange8 { first: 0, last: 0 },
-            ext_minor: XRecordRange16 { first: 0, last: 0 },
-        },
-        ext_replies: XRecordExtRange {
-            ext_major: XRecordRange8 { first: 0, last: 0 },
-            ext_minor: XRecordRange16 { first: 0, last: 0 },
-        },
-        delivered_events: XRecordRange8 { first: 0, last: 0 },
-        device_events: XRecordRange8 {
-            first: KeyPress as u8,
-            last: ButtonPress as u8,
-        },
-        errors: XRecordRange8 { first: 0, last: 0 },
-        client_started: 0,
-        client_died: 0,
-    };
-    let mut ranges = [range as *mut _];
-    unsafe {
-        let context = XRecordCreateContext(
-            record_display,
-            0,
-            &mut clients[0],
-            clients.len() as i32,
-            &mut ranges[0],
-            ranges.len() as i32,
-        );
-        assert_ne!(
-            0,
-            XRecordEnableContextAsync(
-                record_display,
-                context,
-                Some(xrecord_callback),
-                &mut app_state as *mut _ as *mut i8,
-            )
-        );
-
-        let main_fd = XConnectionNumber(main_display);
-        let record_fd = XConnectionNumber(record_display);
-
-        let root_window = XDefaultRootWindow(main_display);
-        app_state.grab_keys(root_window);
-        XSelectInput(
-            main_display,
-            root_window,
-            StructureNotifyMask | SubstructureNotifyMask,
-        );
-        loop {
-            let mut readfs = MaybeUninit::uninit();
-            FD_ZERO(readfs.as_mut_ptr());
-            let mut readfds = readfs.assume_init();
-            FD_SET(main_fd, &mut readfds);
-            FD_SET(record_fd, &mut readfds);
-            libc::select(
-                max(dbg!(main_fd), dbg!(record_fd)) + 1,
-                &mut readfds,
-                null_mut(),
-                null_mut(),
-                null_mut(),
-            );
-            if FD_ISSET(record_fd, &mut readfds) {
-                XRecordProcessReplies(record_display);
-            }
-            if FD_ISSET(main_fd, &mut readfds) {
-                let mut event = MaybeUninit::uninit();
-                XNextEvent(main_display, event.as_mut_ptr());
-                let event = event.assume_init();
-                match event.any.type_ as c_int {
-                    CreateNotify => {
-                        let event = event.create_window;
-                        app_state.grab_keys(event.window);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    app_state.start_recording();
+    app_state.event_loop();
 }
