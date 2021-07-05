@@ -35,10 +35,6 @@ impl<'d> AppState<'d> {
             .copied()
     }
 
-    fn get_keyboard_mapping(&mut self) {
-        self.keyboard_mapping = self.display.get_keyboard_mapping();
-    }
-
     fn keycode_to_keysym(&self, keycode: Keycode) -> Option<Keysym> {
         self.keyboard_mapping
             .keycode_to_keysyms
@@ -154,14 +150,13 @@ impl<'d> AppState<'d> {
         info!("config: {:?}", config);
         let keyboard_mapping = display.get_keyboard_mapping();
 
-        let mut state = AppState {
+        let state = AppState {
             display: &display,
             _keys_down: Default::default(),
             config,
             keyboard_mapping,
             _modifiers: Default::default(),
         };
-        state.get_keyboard_mapping();
 
         // config.visit_keyspecs(|k| match k {
         //     KeySpec::Code(_) => {}
