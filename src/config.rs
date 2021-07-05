@@ -10,6 +10,14 @@ pub enum KeySpec {
     Sym(String),
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum KeySeq {
+    Key(KeySpec),
+    Chord(Vec<KeySpec>),
+    ChordSeq(Vec<Vec<KeySpec>>),
+}
+
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[serde(from = "BoolModDisposition")]
@@ -99,7 +107,7 @@ pub struct KeyMapping {
     #[serde(flatten)]
     pub mods: ModSpec,
     pub input: KeySpec,
-    pub output: Vec<Vec<KeySpec>>,
+    pub output: KeySeq,
 }
 
 #[derive(Debug, Deserialize, Default)]

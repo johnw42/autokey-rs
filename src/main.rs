@@ -4,9 +4,9 @@
 
 // use x_interface::*;
 
-use config::KeyMapping;
 use enumset::EnumSet;
-use libc::{c_int, c_uint, c_ulong, c_void, FD_ISSET, FD_SET, FD_ZERO};
+use libc::{c_int, c_uint, c_ulong, FD_ISSET, FD_SET, FD_ZERO};
+use log::{info, trace};
 use std::cmp::max;
 use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
@@ -15,8 +15,7 @@ use std::ptr::{null, null_mut};
 use x11::xlib::{
     CreateNotify, Display, GrabModeAsync, NoSymbol, StructureNotifyMask, SubstructureNotifyMask,
     Window, XConnectionNumber, XDefaultRootWindow, XDisplayKeycodes, XFree, XFreeModifiermap,
-    XGetKeyboardMapping, XGetModifierMapping, XGrabKey, XKeycodeToKeysym, XKeysymToKeycode,
-    XNextEvent, XQueryTree, XSelectInput,
+    XGetKeyboardMapping, XGetModifierMapping, XGrabKey, XNextEvent, XQueryTree, XSelectInput,
 };
 use x11::xtest::XTestFakeKeyEvent;
 use x11::{
@@ -52,12 +51,18 @@ struct RawEvent {
 }
 
 struct AppState {
-    main_display: *mut Display,
-    _record_display: *mut Display,
+    display: *mut Display,
     keys_down: BTreeSet<Keycode>,
     config: Vec<ConfigItem>,
     keysym_to_keycode: HashMap<Keysym, Keycode>,
     keycode_to_keysyms: HashMap<Keycode, Vec<Keysym>>,
+    modifiers: EnumSet<Modifier>,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum KeyEvent {
+    Press,
+    Release,
 }
 
 impl AppState {
@@ -77,10 +82,10 @@ impl AppState {
         unsafe {
             let mut min_keycode = 0;
             let mut max_keycode = 0;
-            XDisplayKeycodes(self.main_display, &mut min_keycode, &mut max_keycode);
+            XDisplayKeycodes(self.display, &mut min_keycode, &mut max_keycode);
             let mut keysyms_per_keycode = 0;
             let keysyms = XGetKeyboardMapping(
-                self.main_display,
+                self.display,
                 min_keycode as u8,
                 max_keycode - min_keycode + 1,
                 &mut keysyms_per_keycode,
@@ -126,7 +131,7 @@ impl AppState {
     }
 
     fn write_key(&self, label: &str, keycode: Keycode, state: u16) {
-        println!(
+        trace!(
             "{}: code={}, sym={} ({:?}), state={}, down=[{}]",
             label,
             keycode.value(),
@@ -143,6 +148,20 @@ impl AppState {
         );
     }
 
+    fn send_key_event(&self, keycode: Keycode, key_event: KeyEvent) {
+        unsafe {
+            XTestFakeKeyEvent(
+                self.display,
+                keycode.value() as c_uint,
+                match key_event {
+                    KeyEvent::Press => 1,
+                    KeyEvent::Release => 0,
+                },
+                0,
+            );
+        }
+    }
+
     fn handle_xrecord_event(&mut self, event: &RawEvent) {
         match event.code as c_int {
             KeyPress => {
@@ -155,30 +174,30 @@ impl AppState {
                 if let Ok(code) = Keycode::try_from(event.detail) {
                     self.keys_down.remove(&code);
                     self.write_key("KeyRelease", code, event.state);
-                    if code == 52 && event.state == 0xc {
-                        let press = 1;
-                        let release = 0;
-                        unsafe {
-                            for &key in self.keys_down.iter() {
-                                XTestFakeKeyEvent(
-                                    self.main_display,
-                                    key.value() as c_uint,
-                                    release,
-                                    0,
-                                );
-                            }
-                            XTestFakeKeyEvent(self.main_display, 52, press, 0);
-                            XTestFakeKeyEvent(self.main_display, 52, release, 0);
-                            for &key in self.keys_down.iter() {
-                                XTestFakeKeyEvent(
-                                    self.main_display,
-                                    key.value() as c_uint,
-                                    press,
-                                    0,
-                                );
-                            }
-                        }
-                    }
+                    // if code == 52 && event.state == 0xc {
+                    //     let press = 1;
+                    //     let release = 0;
+                    //     unsafe {
+                    //         for &key in self.keys_down.iter() {
+                    //             XTestFakeKeyEvent(
+                    //                 self.main_display,
+                    //                 key.value() as c_uint,
+                    //                 release,
+                    //                 0,
+                    //             );
+                    //         }
+                    //         XTestFakeKeyEvent(self.main_display, 52, press, 0);
+                    //         XTestFakeKeyEvent(self.main_display, 52, release, 0);
+                    //         for &key in self.keys_down.iter() {
+                    //             XTestFakeKeyEvent(
+                    //                 self.main_display,
+                    //                 key.value() as c_uint,
+                    //                 press,
+                    //                 0,
+                    //             );
+                    //         }
+                    //     }
+                    // }
                 }
             }
             ButtonPress => {
@@ -201,7 +220,7 @@ impl AppState {
             let mut children = null_mut();
             let mut num_children = 0;
             if XQueryTree(
-                self.main_display,
+                self.display,
                 window,
                 &mut root,
                 &mut parent,
@@ -221,7 +240,7 @@ impl AppState {
     fn grab_keys(&mut self, window: Window) {
         self.visit_window_tree(window, &mut |self_, child| unsafe {
             XGrabKey(
-                self_.main_display,
+                self_.display,
                 52,
                 0xc,
                 child,
@@ -265,12 +284,12 @@ fn main() {
     let mut config = json5::from_str(include_str!("config.json5")).unwrap();
 
     let mut app_state = AppState {
-        main_display,
-        _record_display: record_display,
+        display: main_display,
         keys_down: Default::default(),
         config: Default::default(),
         keysym_to_keycode: Default::default(),
         keycode_to_keysyms: Default::default(),
+        modifiers: Default::default(),
     };
 
     app_state.get_keyboard_mapping();
@@ -286,7 +305,7 @@ fn main() {
     //         );
     //     }
     // });
-    dbg!(&config);
+    info!("config: {:?}", config);
 
     app_state.config = config;
 

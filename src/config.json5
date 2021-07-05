@@ -6,32 +6,32 @@
       {
         name: 'Untab',
         input: 194,
-        output: [['Shift_L', 'Tab']],
+        output: ['Shift_L', 'Tab'],
       },
       {
         name: 'Delete',
         input: 197,
-        output: [['Delete']],
+        output: 'Delete',
       },
       {
         name: 'Cut',
         input: 198,
-        output: [['Control_L', 'x']],
+        output: ['Control_L', 'x'],
       },
       {
         name: 'Copy',
         input: 199,
-        output: [['Control_L', 'c']],
+        output: ['Control_L', 'c'],
       },
       {
         name: 'Paste',
         input: 200,
-        output: [['Control_L', 'v']],
+        output: ['Control_L', 'v'],
       },
       {
         name: 'Undo',
         input: 201,
-        output: [['Control_L', 'z']],
+        output: ['Control_L', 'z'],
       },
     ]
   },
@@ -49,7 +49,7 @@
         ctrl: true,
         shift: true,
         input: 'w',
-        output: [['Control_L', 'w']],
+        output: ['Control_L', 'w'],
       },
     ],
   },
