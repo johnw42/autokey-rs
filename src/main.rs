@@ -1,23 +1,17 @@
-use config::Config;
-use display::{Display, KeyboardMapping, RecordedEvent};
-use enumset::EnumSet;
-use libc::c_int;
-use log::{debug, info};
-use std::cell::RefCell;
-use std::collections::BTreeSet;
-use std::convert::TryFrom;
-
-use x11::xlib::{ButtonPress, KeyPress, KeyRelease, XEvent};
-use x11::xlib::{CreateNotify, Window};
-
 mod config;
 mod display;
 mod key;
 
+use config::{Config, KeySpec};
+use display::{
+    Display, Event, KeyboardMapping, RecordedEvent, RecordedEventDetail, RecordingDisplay, Window,
+};
+use enumset::EnumSet;
 use key::*;
-
-use crate::config::KeySpec;
-use crate::display::RecordingDisplay;
+use log::{debug, info};
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::convert::TryFrom;
 
 struct AppState<'d> {
     display: &'d Display,
@@ -49,9 +43,9 @@ impl<'d> AppState<'d> {
             .unwrap_or_else(|| format!("<keycode_{}>", keycode.value()))
     }
 
-    fn log_key(&self, label: &str, keycode: Keycode, state: u16) {
+    fn log_key(&self, label: &str, keycode: Keycode, state: EnumSet<Modifier>) {
         debug!(
-            "{}: code={}, sym={} ({:?}), state={}, down=[{}]",
+            "{}: code={}, sym={} ({:?}), state={:?}, down=[{}]",
             label,
             keycode.value(),
             self.keycode_to_keysym(keycode)
@@ -67,51 +61,44 @@ impl<'d> AppState<'d> {
         );
     }
 
-    fn handle_recorded_event(&mut self, event: &RecordedEvent) {
-        #[allow(non_upper_case_globals)]
-        match event.code as c_int {
-            KeyPress => {
-                if let Ok(code) = Keycode::try_from(event.detail) {
-                    self._keys_down.insert(code);
-                    self.log_key("KeyPress", code, event.state);
-                }
+    fn handle_recorded_event(&mut self, event: RecordedEvent) {
+        match event.detail {
+            RecordedEventDetail::KeyPress(code) => {
+                self._keys_down.insert(code);
+                self.log_key("KeyPress", code, event.state);
             }
-            KeyRelease => {
-                if let Ok(code) = Keycode::try_from(event.detail) {
-                    self._keys_down.remove(&code);
-                    self.log_key("KeyRelease", code, event.state);
-                    // if code == 52 && event.state == 0xc {
-                    //     let press = 1;
-                    //     let release = 0;
-                    //     unsafe {
-                    //         for &key in self.keys_down.iter() {
-                    //             XTestFakeKeyEvent(
-                    //                 self.main_display,
-                    //                 key.value() as c_uint,
-                    //                 release,
-                    //                 0,
-                    //             );
-                    //         }
-                    //         XTestFakeKeyEvent(self.main_display, 52, press, 0);
-                    //         XTestFakeKeyEvent(self.main_display, 52, release, 0);
-                    //         for &key in self.keys_down.iter() {
-                    //             XTestFakeKeyEvent(
-                    //                 self.main_display,
-                    //                 key.value() as c_uint,
-                    //                 press,
-                    //                 0,
-                    //             );
-                    //         }
-                    //     }
-                    // }
-                }
+            RecordedEventDetail::KeyRelease(code) => {
+                self._keys_down.remove(&code);
+                self.log_key("KeyRelease", code, event.state);
+                // if code == 52 && event.state == 0xc {
+                //     let press = 1;
+                //     let release = 0;
+                //     unsafe {
+                //         for &key in self.keys_down.iter() {
+                //             XTestFakeKeyEvent(
+                //                 self.main_display,
+                //                 key.value() as c_uint,
+                //                 release,
+                //                 0,
+                //             );
+                //         }
+                //         XTestFakeKeyEvent(self.main_display, 52, press, 0);
+                //         XTestFakeKeyEvent(self.main_display, 52, release, 0);
+                //         for &key in self.keys_down.iter() {
+                //             XTestFakeKeyEvent(
+                //                 self.main_display,
+                //                 key.value() as c_uint,
+                //                 press,
+                //                 0,
+                //             );
+                //         }
+                //     }
+                // }
             }
-            ButtonPress => {
-                println!("ButtonPress: {} {:x}", event.detail, event.state);
+            RecordedEventDetail::ButtonPress(button) => {
+                println!("ButtonPress: {} {:?}", button, event.state);
             }
-            _ => {
-                println!("event type: {:?}", event);
-            }
+            RecordedEventDetail::Unknown { .. } => {}
         }
     }
 
@@ -130,16 +117,9 @@ impl<'d> AppState<'d> {
         });
     }
 
-    fn handle_xevent(&mut self, event: XEvent) {
-        unsafe {
-            #[allow(non_upper_case_globals)]
-            match event.any.type_ as c_int {
-                CreateNotify => {
-                    let event = event.create_window;
-                    self.grab_keys_for_window(event.window);
-                }
-                _ => {}
-            }
+    fn handle_xevent(&mut self, event: Event) {
+        match event {
+            Event::CreateNotify { window } => self.grab_keys_for_window(window),
         }
     }
 
