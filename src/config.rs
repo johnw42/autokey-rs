@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use enumset::EnumSet;
 use serde::Deserialize;
 

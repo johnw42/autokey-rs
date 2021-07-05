@@ -1,9 +1,8 @@
-use enumset::{EnumSet, EnumSetType};
+#![allow(dead_code)]
+
+use enumset::EnumSetType;
 use libc::c_ulong;
-use serde::{
-    de::{Error, Visitor},
-    Deserialize, Deserializer, Serialize,
-};
+use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     convert::TryFrom,
@@ -78,7 +77,7 @@ impl FromStr for Keysym {
     }
 }
 
-#[derive(Debug, EnumSetType, Deserialize, Serialize)]
+#[derive(Debug, EnumSetType, Deserialize, Serialize, Hash)]
 #[enumset(serialize_as_list)]
 #[serde(rename_all = "lowercase")]
 pub enum Modifier {
