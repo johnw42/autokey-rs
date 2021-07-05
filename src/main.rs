@@ -29,7 +29,7 @@ mod key;
 
 use key::*;
 
-use crate::config::{Config, KeySpec};
+use crate::config::{ConfigItem, KeySpec};
 
 // https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#Encoding::Events
 #[derive(Debug)]
@@ -55,7 +55,7 @@ struct AppState {
     main_display: *mut Display,
     _record_display: *mut Display,
     keys_down: BTreeSet<Keycode>,
-    config: Config,
+    config: Vec<ConfigItem>,
     keysym_to_keycode: HashMap<Keysym, Keycode>,
     keycode_to_keysyms: HashMap<Keycode, Vec<Keysym>>,
 }
@@ -246,8 +246,6 @@ unsafe extern "C" fn xrecord_callback(app_state: *mut i8, data: *mut XRecordInte
 }
 
 fn main() {
-    println!("Hello, world!");
-
     let main_display = unsafe { XOpenDisplay(null()) };
     let record_display = unsafe { XOpenDisplay(null()) };
     unsafe {
@@ -264,7 +262,7 @@ fn main() {
         XFreeModifiermap(mapping);
     }
 
-    let mut config: Config = json5::from_str(include_str!("config.json5")).unwrap();
+    let mut config = json5::from_str(include_str!("config.json5")).unwrap();
 
     let mut app_state = AppState {
         main_display,
@@ -277,18 +275,20 @@ fn main() {
 
     app_state.get_keyboard_mapping();
 
-    config.visit_keyspecs(|k| match k {
-        KeySpec::Code(_) => {}
-        KeySpec::Sym(s) => {
-            *k = KeySpec::Code(
-                app_state
-                    .keysym_to_keycode(s.parse().expect("invalid key name"))
-                    .expect("invalid keysym")
-                    .value() as i32,
-            );
-        }
-    });
+    // config.visit_keyspecs(|k| match k {
+    //     KeySpec::Code(_) => {}
+    //     KeySpec::Sym(s) => {
+    //         *k = KeySpec::Code(
+    //             app_state
+    //                 .keysym_to_keycode(s.parse().expect("invalid key name"))
+    //                 .expect("invalid keysym")
+    //                 .value() as i32,
+    //         );
+    //     }
+    // });
     dbg!(&config);
+
+    app_state.config = config;
 
     let mut clients = [XRecordAllClients];
     let range = unsafe { &mut *XRecordAllocRange() };

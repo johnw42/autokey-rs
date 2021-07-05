@@ -102,45 +102,29 @@ pub struct KeyMapping {
     pub output: Vec<Vec<KeySpec>>,
 }
 
-impl KeyMapping {
-    fn visit_keyspecs<F>(&mut self, f: F)
-    where
-        F: Fn(&mut KeySpec),
-    {
-        f(&mut self.input);
-        self.output.iter_mut().flatten().for_each(|k| f(k))
-    }
-}
-
 #[derive(Debug, Deserialize, Default)]
 pub struct Conditions {
     pub window_title: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
-pub struct Group {
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConfigItem {
+    name: Option<String>,
+    #[serde(default = "default_true")]
+    enabled: bool,
     #[serde(flatten)]
     pub conditions: Conditions,
-    pub contents: Vec<Item>,
+    #[serde(flatten)]
+    body: ItemBody,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub enum Item {
+pub enum ItemBody {
     KeyMapping(KeyMapping),
-    Group(Group),
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct Config {
-    pub items: Vec<Item>,
-}
-
-impl Config {
-    pub fn visit_keyspecs<F>(&mut self, f: F)
-    where
-        F: Fn(&mut KeySpec),
-    {
-        //self.mappings.iter_mut().for_each(|m| m.visit_keyspecs(&f))
-    }
+    Group { contents: Vec<ConfigItem> },
 }

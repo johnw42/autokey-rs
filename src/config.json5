@@ -1,54 +1,56 @@
-{
-  items: [
-    {
-      // delete
-      input: 197,
-      output: [['Delete']],
-    },
-    {
-      // cut
-      input: 198,
-      output: [['Control_L', 'x']],
-    },
-    {
-      // copy
-      input: 199,
-      output: [['Control_L', 'c']],
-    },
-    {
-      // paste
-      input: 200,
-      output: [['Control_L', 'v']],
-    },
-    {
-      // undo
-      input: 201,
-      output: [['Control_L', 'z']],
-    },
-    {
-      window_title: 'Google Chrome',
-      contents: [
-        {
-          ctrl: true,
-          shift: false,
-          input: 'w',
-          output: [],
-        },
-        {
-          ctrl: true,
-          shift: true,
-          input: 'w',
-          output: [['Control_L', 'w']],
-        },
-      ],
-    },
-
-    // {
-    //   // paste
-    //   shift: true,
-    //   ctrl: false,
-    //   input: 200,
-    //   output: [["Shift", 'Ctrl', 'v']],
-    // },
-  ]
-}
+[
+  {
+    name: 'CLEAVE',
+    enabled: true,
+    contents: [
+      {
+        name: 'Untab',
+        input: 194,
+        output: [['Shift_L', 'Tab']],
+      },
+      {
+        name: 'Delete',
+        input: 197,
+        output: [['Delete']],
+      },
+      {
+        name: 'Cut',
+        input: 198,
+        output: [['Control_L', 'x']],
+      },
+      {
+        name: 'Copy',
+        input: 199,
+        output: [['Control_L', 'c']],
+      },
+      {
+        name: 'Paste',
+        input: 200,
+        output: [['Control_L', 'v']],
+      },
+      {
+        name: 'Undo',
+        input: 201,
+        output: [['Control_L', 'z']],
+      },
+    ]
+  },
+  {
+    name: 'Chrome hotkeys',
+    window_title: 'Google Chrome',
+    contents: [
+      {
+        ctrl: true,
+        shift: false,
+        input: 'w',
+        output: [],
+      },
+      {
+        ctrl: true,
+        shift: true,
+        input: 'w',
+        output: [['Control_L', 'w']],
+      },
+    ],
+  },
+]
