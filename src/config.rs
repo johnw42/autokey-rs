@@ -62,6 +62,21 @@ pub struct ModSpec {
 }
 
 impl ModSpec {
+    pub fn mod_sets(&self) -> Vec<EnumSet<Modifier>> {
+        let required_set = self.with_disposition(ModDisposition::Required);
+        let allowed_set = self.with_disposition(ModDisposition::Allowed);
+        let mut result = Vec::with_capacity(1 << allowed_set.len());
+        result.push(required_set);
+        for new_mod in allowed_set {
+            for i in 0..result.len() {
+                let old_set = result[i];
+                debug_assert!(!old_set.contains(new_mod));
+                result.push(old_set | new_mod);
+            }
+        }
+        result
+    }
+
     pub fn disposition_of(&self, modifier: Modifier) -> ModDisposition {
         match modifier {
             Modifier::Shift => self.shift,
@@ -80,10 +95,6 @@ impl ModSpec {
             .into_iter()
             .filter(|m| self.disposition_of(*m) == disposition)
             .collect()
-    }
-
-    pub fn required(&self) -> EnumSet<Modifier> {
-        self.with_disposition(ModDisposition::Required)
     }
 }
 

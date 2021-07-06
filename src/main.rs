@@ -150,11 +150,13 @@ impl<'d> AppState<'d> {
         self.display.visit_window_tree(window, &mut |child| {
             self.config.visit_key_mappings(&|k| match k.input {
                 KeySpec::Code(c) => {
-                    self.display.grab_key(
-                        child,
-                        Keycode::try_from(c as u8).expect("invalid keycode"),
-                        Some(EnumSet::<Modifier>::from_u8(0xc)),
-                    );
+                    for mod_set in k.mods.mod_sets() {
+                        self.display.grab_key(
+                            child,
+                            Keycode::try_from(c as u8).expect("invalid keycode"),
+                            Some(mod_set),
+                        );
+                    }
                 }
                 KeySpec::Sym(_) => {}
             })
