@@ -4,11 +4,12 @@ mod key;
 
 use config::{Config, KeySpec};
 use display::{
-    Display, Event, KeyboardMapping, RecordedEvent, RecordedEventDetail, RecordingDisplay, Window,
+    Button, Display, Event, InputEvent, KeyboardMapping, RecordedEvent, RecordingDisplay, UpOrDown,
+    Window,
 };
 use enumset::EnumSet;
 use key::*;
-use log::{debug, info};
+use log::{debug, error, info};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
 use std::convert::TryFrom;
@@ -19,7 +20,7 @@ struct AppState<'d> {
     config: Config,
     keyboard_mapping: KeyboardMapping,
     _modifiers: EnumSet<Modifier>,
-    ignore_queue: VecDeque<Box<dyn Fn(&RecordedEvent) -> bool + 'static>>,
+    ignore_queue: VecDeque<InputEvent>,
 }
 
 impl<'d> AppState<'d> {
@@ -62,17 +63,29 @@ impl<'d> AppState<'d> {
         );
     }
 
+    fn _send_input_event(&mut self, event: InputEvent) {
+        match self.display.send_input_event(event.clone()) {
+            Ok(_) => self.ignore_queue.push_back(event),
+            Err(_) => error!("error sending input event: {:?}", event),
+        }
+    }
+
     fn handle_recorded_event(&mut self, event: RecordedEvent) {
-        if let Some(f) = self.ignore_queue.front() {
-            if f(&event) {
-                info!("ignoring event");
+        if let Some(to_ignore) = self.ignore_queue.front() {
+            if event.input == *to_ignore {
+                info!("ignoring event: {:?}", event);
                 self.ignore_queue.pop_front();
                 return;
             }
         }
 
-        match event.detail {
-            RecordedEventDetail::KeyPress(code) => {
+        use Button::*;
+        use UpOrDown::*;
+        match event.input {
+            InputEvent {
+                direction: Down,
+                button: Key(code),
+            } => {
                 // if code.value() == 15 {
                 //     self.ignore_queue
                 //         .push_back(Box::new(move |e| match &e.detail {
@@ -93,7 +106,10 @@ impl<'d> AppState<'d> {
                 self._keys_down.insert(code);
                 self.log_key("KeyPress", code, event.state);
             }
-            RecordedEventDetail::KeyRelease(code) => {
+            InputEvent {
+                direction: Up,
+                button: Key(code),
+            } => {
                 self._keys_down.remove(&code);
                 self.log_key("KeyRelease", code, event.state);
                 // if code == 52 && event.state == 0xc {
@@ -121,10 +137,12 @@ impl<'d> AppState<'d> {
                 //     }
                 // }
             }
-            RecordedEventDetail::ButtonPress(button) => {
-                println!("ButtonPress: {} {:?}", button, event.state);
+            InputEvent {
+                button: MouseButton(_),
+                ..
+            } => {
+                info!("ignoring mouse event: {:?}", event);
             }
-            RecordedEventDetail::Unknown { .. } => {}
         }
     }
 

@@ -5,15 +5,16 @@ use libc::{c_int, c_uint, c_ulong, FD_ISSET, FD_SET, FD_ZERO};
 use log::{info, trace};
 use std::cmp::max;
 use std::collections::HashMap;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::mem::{size_of_val, MaybeUninit};
 use std::ptr::{null, null_mut};
 use x11::xlib::{
-    AnyModifier, CreateNotify, Display as RawDisplay, GrabModeAsync, NoSymbol, StructureNotifyMask,
-    SubstructureNotifyMask, Window as WindowId, XConnectionNumber, XDefaultRootWindow,
-    XDisplayKeycodes, XEvent, XFree, XFreeModifiermap, XGetKeyboardMapping, XGetModifierMapping,
-    XGrabKey, XNextEvent, XQueryTree, XSelectInput,
+    AnyModifier, ButtonRelease, CreateNotify, Display as RawDisplay, GrabModeAsync, NoSymbol,
+    StructureNotifyMask, SubstructureNotifyMask, Window as WindowId, XConnectionNumber,
+    XDefaultRootWindow, XDisplayKeycodes, XEvent, XFree, XFreeModifiermap, XGetKeyboardMapping,
+    XGetModifierMapping, XGrabKey, XNextEvent, XQueryTree, XSelectInput,
 };
+use x11::xtest::XTestFakeButtonEvent;
 use x11::{
     xlib::{ButtonPress, KeyPress, KeyRelease, XOpenDisplay},
     xrecord::*,
@@ -101,47 +102,62 @@ struct RecordedEventData {
     same_screen: u8,
     unused: u8,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpOrDown {
+    Up,
+    Down,
+}
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Button {
+    Key(Keycode),
+    MouseButton(u8),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct InputEvent {
+    pub direction: UpOrDown,
+    pub button: Button,
+}
+
+#[derive(Debug)]
 pub struct RecordedEvent {
-    pub detail: RecordedEventDetail,
     pub state: EnumSet<Modifier>,
+    pub input: InputEvent,
 }
 
-pub enum RecordedEventDetail {
-    KeyPress(Keycode),
-    KeyRelease(Keycode),
-    ButtonPress(u8),
-    Unknown { code: u8, detail: u8 },
-}
+struct UknownRecordedEvent;
 
-impl From<&RecordedEventData> for RecordedEvent {
-    fn from(data: &RecordedEventData) -> Self {
+impl TryFrom<&RecordedEventData> for RecordedEvent {
+    type Error = UknownRecordedEvent;
+
+    #[allow(non_upper_case_globals)]
+    fn try_from(data: &RecordedEventData) -> Result<Self, Self::Error> {
         let state = EnumSet::<Modifier>::from_u16_truncated(data.state);
-        #[allow(non_upper_case_globals)]
-        let detail = match data.code as c_int {
-            KeyPress => Keycode::try_from(data.detail)
-                .ok()
-                .map(RecordedEventDetail::KeyPress),
-            KeyRelease => Keycode::try_from(data.detail)
-                .ok()
-                .map(RecordedEventDetail::KeyRelease),
-            ButtonPress => Some(RecordedEventDetail::ButtonPress(data.detail)),
-            _ => None,
+        let code = data.code as c_int;
+        let direction = match code {
+            KeyPress | ButtonPress => UpOrDown::Down,
+            KeyRelease | ButtonRelease => UpOrDown::Up,
+            _ => {
+                debug_assert!(code < MIN_RECORDED_EVENT || code > MAX_RECORDED_EVENT);
+                return Err(UknownRecordedEvent);
+            }
         };
-        RecordedEvent {
-            state,
-            detail: detail.unwrap_or_else(|| RecordedEventDetail::Unknown {
-                code: data.code,
-                detail: data.detail,
-            }),
-        }
+        let button = match code {
+            KeyPress | KeyRelease => Keycode::try_from(data.detail).ok().map(Button::Key),
+            ButtonPress | ButtonRelease => Some(Button::MouseButton(data.detail)),
+            _ => unreachable!(),
+        };
+        button.map_or_else(
+            || Err(UknownRecordedEvent),
+            |button| {
+                Ok(RecordedEvent {
+                    state,
+                    input: InputEvent { button, direction },
+                })
+            },
+        )
     }
-}
-
-#[derive(Clone, Copy)]
-pub enum KeyEvent {
-    Press,
-    Release,
 }
 
 impl Display {
@@ -204,17 +220,27 @@ impl Display {
         hash_map
     }
 
-    pub fn send_key_event(&self, keycode: Keycode, key_event: KeyEvent) {
-        unsafe {
-            XTestFakeKeyEvent(
-                self.ptr,
-                keycode.value() as c_uint,
-                match key_event {
-                    KeyEvent::Press => 1,
-                    KeyEvent::Release => 0,
-                },
-                0,
-            );
+    pub fn send_input_event(&self, event: InputEvent) -> Result<(), ()> {
+        let is_press = match event.direction {
+            UpOrDown::Up => 0,
+            UpOrDown::Down => 1,
+        };
+        let delay = 0;
+        let succeded = unsafe {
+            // https://www.x.org/releases/X11R7.7/doc/libXtst/xtestlib.html
+            match event.button {
+                Button::Key(keycode) => {
+                    XTestFakeKeyEvent(self.ptr, keycode.value() as c_uint, is_press, delay)
+                }
+                Button::MouseButton(button) => {
+                    XTestFakeButtonEvent(self.ptr, button as c_uint, is_press, delay)
+                }
+            }
+        };
+        if succeded == 0 {
+            Err(())
+        } else {
+            Ok(())
         }
     }
 
@@ -320,6 +346,9 @@ impl Display {
     }
 }
 
+const MIN_RECORDED_EVENT: c_int = KeyPress;
+const MAX_RECORDED_EVENT: c_int = ButtonRelease;
+
 impl<'h> RecordingDisplay<'h> {
     pub fn new<H>(handler: H) -> Self
     where
@@ -344,8 +373,8 @@ impl<'h> RecordingDisplay<'h> {
             },
             delivered_events: XRecordRange8 { first: 0, last: 0 },
             device_events: XRecordRange8 {
-                first: KeyPress as u8,
-                last: ButtonPress as u8,
+                first: MIN_RECORDED_EVENT as u8,
+                last: MAX_RECORDED_EVENT as u8,
             },
             errors: XRecordRange8 { first: 0, last: 0 },
             client_started: 0,
@@ -387,6 +416,9 @@ unsafe extern "C" fn xrecord_callback(handler: *mut i8, data: *mut XRecordInterc
     let handler = handler as *mut Box<RecordingHandler<'static>>;
     let event = &*(data.data as *const RecordedEventData);
     debug_assert_eq!((data.data_len * 4) as usize, size_of_val(event));
-    (*handler)(event.into());
+    match event.try_into() {
+        Ok(event) => (*handler)(event),
+        Err(_) => trace!("ignoring input event"),
+    }
     XRecordFreeData(data as *mut _);
 }
