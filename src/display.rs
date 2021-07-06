@@ -274,6 +274,10 @@ impl Display {
         }
     }
 
+    pub fn root_window(&self) -> Window {
+        unsafe { Window::new(self, XDefaultRootWindow(self.ptr)) }
+    }
+
     pub fn event_loop<H>(&self, record_display: &RecordingDisplay, mut handler: H)
     where
         H: FnMut(Event),

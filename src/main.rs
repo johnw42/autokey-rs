@@ -10,7 +10,7 @@ use enumset::EnumSet;
 use key::*;
 use log::{debug, info};
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::convert::TryFrom;
 
 struct AppState<'d> {
@@ -19,6 +19,7 @@ struct AppState<'d> {
     config: Config,
     keyboard_mapping: KeyboardMapping,
     _modifiers: EnumSet<Modifier>,
+    ignore_queue: VecDeque<Box<dyn Fn(&RecordedEvent) -> bool + 'static>>,
 }
 
 impl<'d> AppState<'d> {
@@ -62,8 +63,33 @@ impl<'d> AppState<'d> {
     }
 
     fn handle_recorded_event(&mut self, event: RecordedEvent) {
+        if let Some(f) = self.ignore_queue.front() {
+            if f(&event) {
+                info!("ignoring event");
+                self.ignore_queue.pop_front();
+                return;
+            }
+        }
+
         match event.detail {
             RecordedEventDetail::KeyPress(code) => {
+                // if code.value() == 15 {
+                //     self.ignore_queue
+                //         .push_back(Box::new(move |e| match &e.detail {
+                //             RecordedEventDetail::KeyPress(c) if *c == code => true,
+                //             _ => false,
+                //         }));
+                //     self.ignore_queue
+                //         .push_back(Box::new(move |e| match &e.detail {
+                //             RecordedEventDetail::KeyRelease(c) if *c == code => true,
+                //             _ => false,
+                //         }));
+                //     self.display.send_key_event(code, display::KeyEvent::Press);
+                //     self.display
+                //         .send_key_event(code, display::KeyEvent::Release);
+                //     info!("sent keycode");
+                // }
+
                 self._keys_down.insert(code);
                 self.log_key("KeyPress", code, event.state);
             }
@@ -126,6 +152,12 @@ impl<'d> AppState<'d> {
     fn run() {
         let display = Display::new();
 
+        // let keycode = Keycode::try_from(15).unwrap();
+        // display.visit_window_tree(display.root_window(), &mut |window| {
+        //     display.grab_key(window, keycode, Some(Default::default()));
+        // });
+        // return;
+
         let config = json5::from_str(include_str!("config.json5")).unwrap();
         info!("config: {:?}", config);
         let keyboard_mapping = display.get_keyboard_mapping();
@@ -136,6 +168,7 @@ impl<'d> AppState<'d> {
             config,
             keyboard_mapping,
             _modifiers: Default::default(),
+            ignore_queue: Default::default(),
         };
 
         // config.visit_keyspecs(|k| match k {
