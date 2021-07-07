@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 
-use enumset::EnumSetType;
+use enumset::{EnumSet, EnumSetType};
 use libc::c_ulong;
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
+    collections::HashMap,
     convert::TryFrom,
     ffi::{CStr, CString},
     fmt::Debug,
@@ -91,30 +92,50 @@ pub enum Modifier {
     Mod5,
 }
 
-// struct ModifierVisitor;
+#[derive(Default)]
+pub struct KeyboardMapping {
+    keysym_to_keycode: HashMap<Keysym, Keycode>,
+    keycode_to_keysyms: HashMap<Keycode, Vec<Keysym>>,
+}
 
-// impl<'de> Visitor<'de> for ModifierVisitor {
-//     type Value = Modifier;
+impl KeyboardMapping {
+    pub fn insert(&mut self, keysym: Keysym, keycode: Keycode) {
+        self.keysym_to_keycode.insert(keysym, keycode);
+        self.keycode_to_keysyms
+            .entry(keycode)
+            .or_default()
+            .push(keysym);
+    }
 
-//     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-//         formatter.write_str("a modifier")
-//     }
+    pub fn keysym_to_keycode(&self, keysym: Keysym) -> Option<Keycode> {
+        self.keysym_to_keycode.get(&keysym).copied()
+    }
 
-//     fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
-//     where
-//         E: Error,
-//     {
-//         for m in EnumSet::<Modifier>::all().into_iter() {
-//             if
-//         }
-//     }
-// }
+    pub fn _keycode_to_keysyms(&self, keycode: Keycode) -> Vec<Keysym> {
+        self.keycode_to_keysyms
+            .get(&keycode)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
 
-// impl<'de> Deserialize<'de> for Modifier {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: Deserializer<'de>,
-//     {
-//         deserializer.deserialize_str(ModifierVisitor)
-//     }
-// }
+#[derive(Default)]
+pub struct ModifierMapping {
+    keycode_to_modifiers: HashMap<Keycode, EnumSet<Modifier>>,
+}
+
+impl ModifierMapping {
+    pub fn insert(&mut self, keycode: Keycode, modifier: Modifier) {
+        self.keycode_to_modifiers
+            .entry(keycode)
+            .or_default()
+            .insert(modifier);
+    }
+
+    pub fn keycode_to_modifiers(&self, keycode: Keycode) -> EnumSet<Modifier> {
+        self.keycode_to_modifiers
+            .get(&keycode)
+            .copied()
+            .unwrap_or_default()
+    }
+}

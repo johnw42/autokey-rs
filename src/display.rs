@@ -4,7 +4,6 @@ use enumset::EnumSet;
 use libc::{c_int, c_uint, c_ulong, FD_ISSET, FD_SET, FD_ZERO};
 use log::trace;
 use std::cmp::max;
-use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::mem::{size_of_val, MaybeUninit};
 use std::ptr::{null, null_mut};
@@ -21,7 +20,7 @@ use x11::{
     xtest::XTestFakeKeyEvent,
 };
 
-use crate::key::{Keycode, Keysym, Modifier};
+use crate::key::{KeyboardMapping, Keycode, Keysym, Modifier, ModifierMapping};
 
 #[derive(Clone, Copy)]
 pub struct Display {
@@ -77,17 +76,6 @@ pub struct RecordingDisplay<'h> {
 }
 
 pub type RecordingHandler<'h> = dyn FnMut(RecordedEvent) + 'h;
-
-#[derive(Default)]
-pub struct KeyboardMapping {
-    pub keysym_to_keycode: HashMap<Keysym, Keycode>,
-    pub keycode_to_keysyms: HashMap<Keycode, Vec<Keysym>>,
-}
-
-#[derive(Default)]
-pub struct ModifierMapping {
-    pub keycode_to_modifiers: HashMap<Keycode, EnumSet<Modifier>>,
-}
 
 // https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#Encoding::Events
 #[derive(Debug)]
@@ -201,12 +189,7 @@ impl Display {
                     ptr = ptr.add(1);
                     if keysym != NoSymbol as c_ulong {
                         let keysym = Keysym::from(keysym);
-                        mapping.keysym_to_keycode.insert(keysym, keycode);
-                        mapping
-                            .keycode_to_keysyms
-                            .entry(keycode)
-                            .or_default()
-                            .push(keysym);
+                        mapping.insert(keysym, keycode);
                     }
                 }
             }
@@ -223,11 +206,7 @@ impl Display {
             for modifier in EnumSet::<Modifier>::all().iter() {
                 for _ in 0..mapping.max_keypermod {
                     if let Ok(code) = Keycode::try_from(*ptr) {
-                        mod_mapping
-                            .keycode_to_modifiers
-                            .entry(code)
-                            .or_default()
-                            .insert(modifier);
+                        mod_mapping.insert(code, modifier);
                     }
                     ptr = ptr.add(1);
                 }

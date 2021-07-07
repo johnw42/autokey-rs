@@ -5,8 +5,7 @@ mod key_grabber;
 
 use config::{Config, ControlFlow, KeySpec};
 use display::{
-    Button, Display, Event, InputEvent, KeyboardMapping, ModifierMapping, RecordedEvent,
-    RecordingDisplay, UpOrDown, WindowRef,
+    Button, Display, Event, InputEvent, RecordedEvent, RecordingDisplay, UpOrDown, WindowRef,
 };
 use enumset::EnumSet;
 use key::*;
@@ -28,23 +27,9 @@ struct AppState {
 }
 
 impl AppState {
-    fn keysym_to_keycode(&self, keysym: Keysym) -> Option<Keycode> {
-        self.keyboard_mapping
-            .keysym_to_keycode
-            .get(&keysym)
-            .copied()
-    }
-
-    fn _keycode_to_keysyms(&self, keycode: Keycode) -> Vec<Keysym> {
-        self.keyboard_mapping
-            .keycode_to_keysyms
-            .get(&keycode)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     fn _keycode_to_string(&self, keycode: Keycode) -> String {
-        self._keycode_to_keysyms(keycode)
+        self.keyboard_mapping
+            ._keycode_to_keysyms(keycode)
             .get(0)
             .and_then(|k| k.to_string())
             .map(|s| format!("<{}>", s))
@@ -56,7 +41,8 @@ impl AppState {
             "{}: code={}, sym={} ({:?}), state={:?}, down=[{}]",
             label,
             keycode.value(),
-            self._keycode_to_keysyms(keycode)
+            self.keyboard_mapping
+                ._keycode_to_keysyms(keycode)
                 .get(0)
                 .map(|k| k.value())
                 .unwrap_or(0),
@@ -81,7 +67,10 @@ impl AppState {
     fn keyspec_matches_button(&self, spec: &KeySpec, button: &Button) -> bool {
         let spec_code = match spec {
             KeySpec::Code(code) => Keycode::try_from(*code).ok(),
-            KeySpec::Sym(sym) => sym.parse().ok().and_then(|sym| self.keysym_to_keycode(sym)),
+            KeySpec::Sym(sym) => sym
+                .parse()
+                .ok()
+                .and_then(|sym| self.keyboard_mapping.keysym_to_keycode(sym)),
         };
         match button {
             Button::Key(button_code) => Some(*button_code) == spec_code,
@@ -92,7 +81,10 @@ impl AppState {
     fn keyspec_to_input_event(&self, spec: &KeySpec, direction: UpOrDown) -> Option<InputEvent> {
         let code = match spec {
             KeySpec::Code(code) => Keycode::try_from(*code).ok(),
-            KeySpec::Sym(sym) => sym.parse().ok().and_then(|sym| self.keysym_to_keycode(sym)),
+            KeySpec::Sym(sym) => sym
+                .parse()
+                .ok()
+                .and_then(|sym| self.keyboard_mapping.keysym_to_keycode(sym)),
         };
         code.map(|code| InputEvent {
             button: Button::Key(code),
@@ -124,13 +116,7 @@ impl AppState {
         self.modifiers = self
             .keys_down
             .iter()
-            .map(|&code| {
-                self.modifier_mapping
-                    .keycode_to_modifiers
-                    .get(&code)
-                    .copied()
-                    .unwrap_or_default()
-            })
+            .map(|&keycode| self.modifier_mapping.keycode_to_modifiers(keycode))
             .collect();
 
         if let Some(to_ignore) = self.ignore_queue.front() {
@@ -203,8 +189,8 @@ impl AppState {
             let code = match &k.input {
                 KeySpec::Code(c) => Some(Keycode::try_from(*c as u8).expect("invalid keycode")),
                 KeySpec::Sym(s) => {
-                    let sym = s.parse().expect("invalid keysym");
-                    self.keyboard_mapping.keysym_to_keycode.get(&sym).copied()
+                    let keysym = s.parse().expect("invalid keysym");
+                    self.keyboard_mapping.keysym_to_keycode(keysym)
                 }
             };
             if let Some(keycode) = code {
