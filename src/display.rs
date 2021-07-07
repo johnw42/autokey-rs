@@ -29,12 +29,12 @@ pub struct Display {
     pub ptr: *mut RawDisplay,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct WindowRef {
     id: WindowId,
 }
 
-impl std::fmt::Debug for WindowRef {
+impl<'d> std::fmt::Debug for WindowRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.id)
     }

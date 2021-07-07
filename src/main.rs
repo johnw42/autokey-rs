@@ -1,6 +1,7 @@
 mod config;
 mod display;
 mod key;
+mod key_grabber;
 
 use config::{Config, ControlFlow, KeySpec};
 use display::{
@@ -9,6 +10,7 @@ use display::{
 };
 use enumset::EnumSet;
 use key::*;
+use key_grabber::KeyGrabber;
 use log::{debug, error, info};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
@@ -26,6 +28,7 @@ struct AppState {
     modifier_mapping: ModifierMapping,
     modifiers: EnumSet<Modifier>,
     ignore_queue: VecDeque<InputEvent>,
+    grabber: KeyGrabber,
 }
 
 impl AppState {
@@ -202,13 +205,16 @@ impl AppState {
                         ControlFlow::Continue
                     }
                 });
-                // TODO: release modifier keys if neccessary
-                self.grab_or_ungrab_keys(false);
+                self.display.sync();
+                self.grabber.push_state();
                 for event in to_send.into_iter() {
+                    if let Button::Key(keycode) = event.button {
+                        self.grabber.ungrab_key(self.display.root_window(), keycode);
+                    }
                     self.send_input_event(event)
                 }
                 self.display.sync();
-                self.grab_or_ungrab_keys(true);
+                self.grabber.pop_state();
             }
 
             // if code.value() == 15 {
@@ -231,14 +237,9 @@ impl AppState {
         }
     }
 
-    fn grab_or_ungrab_keys(&self, grab: bool) {
-        self.grab_or_ungrab_keys_for_window(self.display.root_window(), grab)
-    }
-
-    fn grab_or_ungrab_keys_for_window(&self, window: WindowRef, grab: bool) {
+    fn grab_keys_for_window(&mut self, window: WindowRef) {
         info!("grab_keys_for_window {:?}", window);
-        let child = window;
-        // self.display.visit_window_tree(window, &mut |child| {
+        let mut to_grab = Vec::new();
         self.config.visit_key_mappings(&mut |k| {
             let code = match &k.input {
                 KeySpec::Code(c) => Some(Keycode::try_from(*c as u8).expect("invalid keycode")),
@@ -247,21 +248,51 @@ impl AppState {
                     self.keyboard_mapping.keysym_to_keycode.get(&sym).copied()
                 }
             };
-            if let Some(code) = code {
-                debug!("grabbing key {:?} for {:?}", code, child);
-                for mod_set in k.mods.mod_sets() {
-                    if grab {
-                        self.display.grab_key(child, code, Some(mod_set));
-                    } else {
-                        self.display.ungrab_key(child, code, Some(mod_set));
-                    }
-                }
-                self.display.sync();
+            if let Some(keycode) = code {
+                to_grab.push((window, keycode, k.mods.mod_sets()));
             }
             ControlFlow::Continue
         });
-        // });
+        for (window, keycode, states) in to_grab {
+            debug!("grabbing key {:?} for {:?}", keycode, window);
+            for state in states {
+                self.grabber.grab_key(window, keycode, state)
+            }
+            self.display.sync();
+        }
     }
+
+    // fn grab_or_ungrab_keys(&self, grab: bool) {
+    //     self.grab_or_ungrab_keys_for_window(self.display.root_window(), grab)
+    // }
+
+    // fn grab_or_ungrab_keys_for_window(&self, window: WindowRef, grab: bool) {
+    //     info!("grab_keys_for_window {:?}", window);
+    //     let child = window;
+    //     // self.display.visit_window_tree(window, &mut |child| {
+    //     self.config.visit_key_mappings(&mut |k| {
+    //         let code = match &k.input {
+    //             KeySpec::Code(c) => Some(Keycode::try_from(*c as u8).expect("invalid keycode")),
+    //             KeySpec::Sym(s) => {
+    //                 let sym = s.parse().expect("invalid keysym");
+    //                 self.keyboard_mapping.keysym_to_keycode.get(&sym).copied()
+    //             }
+    //         };
+    //         if let Some(code) = code {
+    //             debug!("grabbing key {:?} for {:?}", code, child);
+    //             for mod_set in k.mods.mod_sets() {
+    //                 if grab {
+    //                     self.display.grab_key(child, code, Some(mod_set));
+    //                 } else {
+    //                     self.display.ungrab_key(child, code, Some(mod_set));
+    //                 }
+    //             }
+    //             self.display.sync();
+    //         }
+    //         ControlFlow::Continue
+    //     });
+    //     // });
+    // }
 
     fn handle_xevent(&mut self, event: Event) {
         // match event {
@@ -292,7 +323,7 @@ impl AppState {
         let keyboard_mapping = display.get_keyboard_mapping();
         let modifier_mapping = display.get_modifier_mapping();
 
-        let state = AppState {
+        let mut state = AppState {
             display,
             keys_down: Default::default(),
             config,
@@ -300,6 +331,7 @@ impl AppState {
             modifier_mapping,
             modifiers: Default::default(),
             ignore_queue: Default::default(),
+            grabber: KeyGrabber::new(display),
         };
 
         // config.visit_keyspecs(|k| match k {
@@ -314,7 +346,9 @@ impl AppState {
         //     }
         // });
 
-        state.grab_or_ungrab_keys(true);
+        //state.grab_or_ungrab_keys(true);
+
+        state.grab_keys_for_window(state.display.root_window());
 
         let state = RefCell::new(state);
         let record_display =
