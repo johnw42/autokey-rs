@@ -5,7 +5,7 @@ mod key;
 use config::{Config, ControlFlow, KeySpec};
 use display::{
     Button, Display, Event, InputEvent, KeyboardMapping, ModifierMapping, RecordedEvent,
-    RecordingDisplay, UpOrDown, Window,
+    RecordingDisplay, UpOrDown, WindowRef,
 };
 use enumset::EnumSet;
 use key::*;
@@ -14,8 +14,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
 use std::convert::TryFrom;
 
-struct AppState<'d> {
-    display: &'d Display,
+struct AppState {
+    display: Display,
     keys_down: BTreeSet<Keycode>,
     config: Config,
     keyboard_mapping: KeyboardMapping,
@@ -24,7 +24,7 @@ struct AppState<'d> {
     ignore_queue: VecDeque<InputEvent>,
 }
 
-impl<'d> AppState<'d> {
+impl AppState {
     fn keysym_to_keycode(&self, keysym: Keysym) -> Option<Keycode> {
         self.keyboard_mapping
             .keysym_to_keycode
@@ -230,7 +230,7 @@ impl<'d> AppState<'d> {
         self.grab_or_ungrab_keys_for_window(self.display.root_window(), grab)
     }
 
-    fn grab_or_ungrab_keys_for_window(&self, window: Window, grab: bool) {
+    fn grab_or_ungrab_keys_for_window(&self, window: WindowRef, grab: bool) {
         info!("grab_keys_for_window {:?}", window);
         let child = window;
         // self.display.visit_window_tree(window, &mut |child| {
@@ -279,7 +279,7 @@ impl<'d> AppState<'d> {
         let modifier_mapping = display.get_modifier_mapping();
 
         let state = AppState {
-            display: &display,
+            display,
             keys_down: Default::default(),
             config,
             keyboard_mapping,

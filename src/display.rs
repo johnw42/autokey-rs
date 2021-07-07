@@ -23,36 +23,36 @@ use x11::{
 
 use crate::key::{Keycode, Keysym, Modifier};
 
+#[derive(Clone, Copy)]
 pub struct Display {
     ptr: *mut RawDisplay,
 }
 
 #[derive(Clone, Copy)]
-pub struct Window<'d> {
+pub struct WindowRef {
     id: WindowId,
-    display: &'d Display,
 }
 
-impl<'d> std::fmt::Debug for Window<'d> {
+impl std::fmt::Debug for WindowRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.id)
     }
 }
 
-impl<'d> Window<'d> {
-    pub fn new(display: &'d Display, id: WindowId) -> Self {
-        Self { id, display }
+impl WindowRef {
+    pub fn new(id: WindowId) -> Self {
+        Self { id }
     }
 }
 
-pub enum Event<'d> {
-    CreateNotify { window: Window<'d> },
+pub enum Event {
+    CreateNotify { window: WindowRef },
 }
 
 pub struct UnknownEventType(c_int);
 
-impl<'d> Event<'d> {
-    fn new(display: &'d Display, event: XEvent) -> Result<Self, UnknownEventType> {
+impl Event {
+    fn new(display: Display, event: XEvent) -> Result<Self, UnknownEventType> {
         // See https://docs.rs/x11/2.18.2/x11/xlib/union.XEvent.html
         unsafe {
             #[allow(non_upper_case_globals)]
@@ -61,7 +61,7 @@ impl<'d> Event<'d> {
                     let event = event.create_window;
                     assert_eq!(event.display, display.ptr);
                     Ok(Event::CreateNotify {
-                        window: Window::new(display, event.window),
+                        window: WindowRef::new(event.window),
                     })
                 }
                 t => Err(UnknownEventType(t)),
@@ -260,9 +260,9 @@ impl Display {
         }
     }
 
-    pub fn visit_window_tree<F>(&self, window: Window, f: &mut F)
+    pub fn visit_window_tree<F>(&self, window: WindowRef, f: &mut F)
     where
-        F: FnMut(Window),
+        F: FnMut(WindowRef),
     {
         unsafe {
             let mut root = 0;
@@ -280,7 +280,7 @@ impl Display {
             {
                 for i in 0..(num_children as usize) {
                     let child = *children.add(i);
-                    self.visit_window_tree(Window::new(self, child), f);
+                    self.visit_window_tree(WindowRef::new(child), f);
                 }
                 XFree(children as *mut _);
             }
@@ -289,7 +289,12 @@ impl Display {
         f(window);
     }
 
-    pub fn grab_key(&self, window: Window, keycode: Keycode, modifiers: Option<EnumSet<Modifier>>) {
+    pub fn grab_key(
+        &self,
+        window: WindowRef,
+        keycode: Keycode,
+        modifiers: Option<EnumSet<Modifier>>,
+    ) {
         assert!(
             modifiers.is_some(),
             "setting modifiers = None causes weird access errors"
@@ -319,7 +324,7 @@ impl Display {
 
     pub fn ungrab_key(
         &self,
-        window: Window,
+        window: WindowRef,
         keycode: Keycode,
         modifiers: Option<EnumSet<Modifier>>,
     ) {
@@ -339,8 +344,8 @@ impl Display {
         self.sync(); // TODO: remove
     }
 
-    pub fn root_window(&self) -> Window {
-        unsafe { Window::new(self, XDefaultRootWindow(self.ptr)) }
+    pub fn root_window(&self) -> WindowRef {
+        unsafe { WindowRef::new(XDefaultRootWindow(self.ptr)) }
     }
 
     pub fn event_loop<H>(&self, record_display: &RecordingDisplay, mut handler: H)
@@ -376,7 +381,7 @@ impl Display {
                 if FD_ISSET(main_fd, &mut readfds) {
                     let mut event = MaybeUninit::uninit();
                     XNextEvent(self.ptr, event.as_mut_ptr());
-                    if let Ok(event) = Event::new(self, event.assume_init()) {
+                    if let Ok(event) = Event::new(*self, event.assume_init()) {
                         handler(event);
                     }
                 }
