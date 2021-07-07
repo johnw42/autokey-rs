@@ -33,22 +33,6 @@ impl KeyGrabber {
         }
     }
 
-    // pub fn push_state(
-    //     &mut self,
-    //     is_grabbed: bool,
-    //     window: WindowRef,
-    //     keycode: Keycode,
-    //     states: HashSet<EnumSet<Modifier>>,
-    // ) {
-    //     let grab = Grab {
-    //         window,
-    //         keycode,
-    //         states,
-    //     };
-    //     self.undo_stack.push(grab.clone());
-    //     self.set_state(grab, false);
-    // }
-
     pub fn grab_key(&mut self, window: WindowRef, keycode: Keycode, state: EnumSet<Modifier>) {
         let grab = Grab {
             window,
@@ -56,7 +40,7 @@ impl KeyGrabber {
             state,
             is_grabbed: true,
         };
-        self.apply_grab(grab.clone(), false);
+        self.apply_grab(grab);
     }
 
     pub fn ungrab_key(&mut self, window: WindowRef, keycode: Keycode) {
@@ -69,7 +53,7 @@ impl KeyGrabber {
                     state,
                     is_grabbed: false,
                 };
-                self.apply_grab(grab.clone(), false);
+                self.apply_grab(grab);
             }
         }
     }
@@ -83,14 +67,13 @@ impl KeyGrabber {
     pub fn pop_state(&mut self) {
         let grabs = self.undo_stack.pop().expect("empty stack");
         info!("popping state with {} items", grabs.len());
-        for grab in grabs.iter().rev() {
-            self.apply_grab(grab.clone(), true);
+        for grab in grabs.into_iter() {
+            self.apply_grab(grab);
         }
-        self.current_grabs = grabs;
         info!("popped state with {} items", self.current_grabs.len());
     }
 
-    fn apply_grab(&mut self, grab: Grab, undo: bool) {
+    fn apply_grab(&mut self, grab: Grab) {
         let Grab {
             window,
             keycode,
@@ -125,15 +108,14 @@ impl KeyGrabber {
             }
         };
 
-        if did_update && !undo {
+        if did_update {
             self.current_grabs.push(grab);
         }
 
         if state.is_empty() {
             info!(
-                "did_update? {}; undo? {}; current_grabs.len() == {}",
+                "did_update? {}; current_grabs.len() == {}",
                 did_update,
-                undo,
                 self.current_grabs.len()
             );
         }
