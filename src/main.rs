@@ -15,10 +15,6 @@ use log::{debug, error, info};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
 use std::convert::TryFrom;
-use std::thread::sleep;
-use std::time::Duration;
-use x11::xlib::XSync;
-use x11::xtest::XTestFakeKeyEvent;
 
 struct AppState {
     display: Display,
@@ -105,29 +101,6 @@ impl AppState {
     }
 
     fn handle_recorded_event(&mut self, event: RecordedEvent) {
-        // match event.input {
-        //     InputEvent {
-        //         direction: UpOrDown::Up,
-        //         button: Button::Key(k),
-        //     } if k.value() == 15 => {
-        //         info!("xyzzy");
-        //         self.display
-        //             .send_input_event(InputEvent {
-        //                 direction: UpOrDown::Down,
-        //                 button: Button::Key(Keycode::try_from(16).unwrap()),
-        //             })
-        //             .unwrap();
-        //         self.display
-        //             .send_input_event(InputEvent {
-        //                 direction: UpOrDown::Up,
-        //                 button: Button::Key(Keycode::try_from(16).unwrap()),
-        //             })
-        //             .unwrap();
-        //     }
-        //     _ => {}
-        // }
-        // return;
-
         use Button::*;
         use UpOrDown::*;
 
@@ -162,9 +135,12 @@ impl AppState {
 
         if let Some(to_ignore) = self.ignore_queue.front() {
             if event.input == *to_ignore {
-                info!("ignoring event: {:?}", event);
                 self.ignore_queue.pop_front();
-                info!("queue length: {}", self.ignore_queue.len());
+                debug!(
+                    "ignoring event {:?}, queue length: {}",
+                    event,
+                    self.ignore_queue.len()
+                );
                 return;
             }
         }
@@ -216,23 +192,6 @@ impl AppState {
                 self.display.sync();
                 self.grabber.pop_state();
             }
-
-            // if code.value() == 15 {
-            //     self.ignore_queue
-            //         .push_back(Box::new(move |e| match &e.detail {
-            //             RecordedEventDetail::KeyPress(c) if *c == code => true,
-            //             _ => false,
-            //         }));
-            //     self.ignore_queue
-            //         .push_back(Box::new(move |e| match &e.detail {
-            //             RecordedEventDetail::KeyRelease(c) if *c == code => true,
-            //             _ => false,
-            //         }));
-            //     self.display.send_key_event(code, display::KeyEvent::Press);
-            //     self.display
-            //         .send_key_event(code, display::KeyEvent::Release);
-            //     info!("sent keycode");
-            // }
             _ => {}
         }
     }
@@ -267,39 +226,7 @@ impl AppState {
         }
     }
 
-    // fn grab_or_ungrab_keys(&self, grab: bool) {
-    //     self.grab_or_ungrab_keys_for_window(self.display.root_window(), grab)
-    // }
-
-    // fn grab_or_ungrab_keys_for_window(&self, window: WindowRef, grab: bool) {
-    //     info!("grab_keys_for_window {:?}", window);
-    //     let child = window;
-    //     // self.display.visit_window_tree(window, &mut |child| {
-    //     self.config.visit_key_mappings(&mut |k| {
-    //         let code = match &k.input {
-    //             KeySpec::Code(c) => Some(Keycode::try_from(*c as u8).expect("invalid keycode")),
-    //             KeySpec::Sym(s) => {
-    //                 let sym = s.parse().expect("invalid keysym");
-    //                 self.keyboard_mapping.keysym_to_keycode.get(&sym).copied()
-    //             }
-    //         };
-    //         if let Some(code) = code {
-    //             debug!("grabbing key {:?} for {:?}", code, child);
-    //             for mod_set in k.mods.mod_sets() {
-    //                 if grab {
-    //                     self.display.grab_key(child, code, Some(mod_set));
-    //                 } else {
-    //                     self.display.ungrab_key(child, code, Some(mod_set));
-    //                 }
-    //             }
-    //             self.display.sync();
-    //         }
-    //         ControlFlow::Continue
-    //     });
-    //     // });
-    // }
-
-    fn handle_xevent(&mut self, event: Event) {
+    fn handle_xevent(&mut self, _event: Event) {
         // match event {
         //     Event::CreateNotify { window } => self.grab_keys_for_window(window),
         // }
@@ -307,21 +234,6 @@ impl AppState {
 
     fn run() {
         let display = Display::new();
-
-        // sleep(Duration::from_secs(1));
-        // unsafe {
-        //     XTestFakeKeyEvent(display.ptr, 52, 1, 0);
-        //     XTestFakeKeyEvent(display.ptr, 52, 0, 0);
-        //     XSync(display.ptr, 0);
-        // }
-        // println!("done");
-        // return;
-
-        // let keycode = Keycode::try_from(15).unwrap();
-        // display.visit_window_tree(display.root_window(), &mut |window| {
-        //     display.grab_key(window, keycode, Some(Default::default()));
-        // });
-        // return;
 
         let config = json5::from_str(include_str!("config.json5")).unwrap();
         info!("config: {:?}", config);
@@ -338,20 +250,6 @@ impl AppState {
             ignore_queue: Default::default(),
             grabber: KeyGrabber::new(display),
         };
-
-        // config.visit_keyspecs(|k| match k {
-        //     KeySpec::Code(_) => {}
-        //     KeySpec::Sym(s) => {
-        //         *k = KeySpec::Code(
-        //             app_state
-        //                 .keysym_to_keycode(s.parse().expect("invalid key name"))
-        //                 .expect("invalid keysym")
-        //                 .value() as i32,
-        //         );
-        //     }
-        // });
-
-        //state.grab_or_ungrab_keys(true);
 
         state.grab_keys_for_window(state.display.root_window());
 

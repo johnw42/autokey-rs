@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use enumset::EnumSet;
-use log::info;
+use log::{debug, trace};
 
 use crate::{
     display::{Display, WindowRef},
@@ -59,18 +59,18 @@ impl KeyGrabber {
     }
 
     pub fn push_state(&mut self) {
-        info!("pushing state with {} items", self.current_grabs.len());
+        debug!("pushing state with {} items", self.current_grabs.len());
         self.undo_stack
             .push(std::mem::take(&mut self.current_grabs));
     }
 
     pub fn pop_state(&mut self) {
         let grabs = self.undo_stack.pop().expect("empty stack");
-        info!("popping state with {} items", grabs.len());
+        debug!("popping state with {} items", grabs.len());
         for grab in grabs.into_iter() {
             self.apply_grab(grab);
         }
-        info!("popped state with {} items", self.current_grabs.len());
+        debug!("popped state with {} items", self.current_grabs.len());
     }
 
     fn apply_grab(&mut self, grab: Grab) {
@@ -82,14 +82,13 @@ impl KeyGrabber {
         } = grab.clone();
         let active_states = self.active_grabs.entry((window, keycode)).or_default();
         if state.is_empty() {
-            info!("applying grab: {:?}", grab);
-            info!("active grab? {}", active_states.contains(&state));
+            trace!("applying grab: {:?}", grab);
+            trace!("active grab? {}", active_states.contains(&state));
         }
-        // info!("num active states: {}", active_states.len());7
         let did_update = if !is_grabbed {
             if active_states.remove(&state) {
                 if state.is_empty() {
-                    info!("ungrabbing {:?}", keycode);
+                    trace!("ungrabbing {:?}", keycode);
                 }
                 self.display.ungrab_key(window, keycode, Some(state));
                 true
@@ -99,7 +98,7 @@ impl KeyGrabber {
         } else {
             if active_states.insert(state) {
                 if state.is_empty() {
-                    info!("grabbing {:?}", keycode);
+                    trace!("grabbing {:?}", keycode);
                 }
                 self.display.grab_key(window, keycode, Some(state));
                 true
@@ -113,7 +112,7 @@ impl KeyGrabber {
         }
 
         if state.is_empty() {
-            info!(
+            trace!(
                 "did_update? {}; current_grabs.len() == {}",
                 did_update,
                 self.current_grabs.len()

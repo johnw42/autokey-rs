@@ -2,7 +2,7 @@
 
 use enumset::EnumSet;
 use libc::{c_int, c_uint, c_ulong, FD_ISSET, FD_SET, FD_ZERO};
-use log::{info, trace};
+use log::trace;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
@@ -297,21 +297,17 @@ impl Display {
         keycode: Keycode,
         modifiers: Option<EnumSet<Modifier>>,
     ) {
-        assert!(
-            modifiers.is_some(),
-            "setting modifiers = None causes weird access errors"
-        );
         let keycode = keycode.value().into();
         let modifiers = modifiers.map_or(AnyModifier, |s| s.as_u8().into());
         let owner_events = 0;
         let pointer_mode = GrabModeAsync;
         let keyboard_mode = GrabModeAsync;
-        if modifiers == 0 {
-            info!(
-                "grabbing key {} at {:?} with mods 0x{:x}",
-                keycode, window, modifiers
-            );
-        }
+        trace!(
+            "grabbing key {} at {:?} with mods 0x{:x}",
+            keycode,
+            window,
+            modifiers
+        );
         unsafe {
             XGrabKey(
                 self.ptr,
@@ -323,7 +319,6 @@ impl Display {
                 keyboard_mode,
             );
         }
-        self.sync(); // TODO: remove
     }
 
     pub fn ungrab_key(
@@ -332,22 +327,17 @@ impl Display {
         keycode: Keycode,
         modifiers: Option<EnumSet<Modifier>>,
     ) {
-        assert!(
-            modifiers.is_some(),
-            "setting modifiers = None causes weird access errors"
-        );
         let keycode = keycode.value().into();
         let modifiers = modifiers.map_or(AnyModifier, |s| s.as_u8().into());
-        if modifiers == 0 {
-            info!(
-                "ungrabbing key {} at {:?} with mods 0x{:x}",
-                keycode, window, modifiers
-            );
-        }
+        trace!(
+            "ungrabbing key {} at {:?} with mods 0x{:x}",
+            keycode,
+            window,
+            modifiers
+        );
         unsafe {
             XUngrabKey(self.ptr, keycode, modifiers, window.id);
         }
-        self.sync(); // TODO: remove67
     }
 
     pub fn root_window(&self) -> WindowRef {
