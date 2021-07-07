@@ -25,7 +25,8 @@ use crate::key::{Keycode, Keysym, Modifier};
 
 #[derive(Clone, Copy)]
 pub struct Display {
-    ptr: *mut RawDisplay,
+    // TODO: remove pub
+    pub ptr: *mut RawDisplay,
 }
 
 #[derive(Clone, Copy)]
@@ -246,6 +247,7 @@ impl Display {
             // https://www.x.org/releases/X11R7.7/doc/libXtst/xtestlib.html
             match event.button {
                 Button::Key(keycode) => {
+                    //info!("XTestFakeKeyEvent {}", is_press);
                     XTestFakeKeyEvent(self.ptr, keycode.value() as c_uint, is_press, delay)
                 }
                 Button::MouseButton(button) => {

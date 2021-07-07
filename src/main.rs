@@ -13,6 +13,10 @@ use log::{debug, error, info};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
 use std::convert::TryFrom;
+use std::thread::sleep;
+use std::time::Duration;
+use x11::xlib::XSync;
+use x11::xtest::XTestFakeKeyEvent;
 
 struct AppState {
     display: Display,
@@ -199,11 +203,12 @@ impl AppState {
                     }
                 });
                 // TODO: release modifier keys if neccessary
-                //self.grab_or_ungrab_keys(false);
+                self.grab_or_ungrab_keys(false);
                 for event in to_send.into_iter() {
                     self.send_input_event(event)
                 }
-                //self.grab_or_ungrab_keys(true767);
+                self.display.sync();
+                self.grab_or_ungrab_keys(true);
             }
 
             // if code.value() == 15 {
@@ -266,6 +271,15 @@ impl AppState {
 
     fn run() {
         let display = Display::new();
+
+        // sleep(Duration::from_secs(1));
+        // unsafe {
+        //     XTestFakeKeyEvent(display.ptr, 52, 1, 0);
+        //     XTestFakeKeyEvent(display.ptr, 52, 0, 0);
+        //     XSync(display.ptr, 0);
+        // }
+        // println!("done");
+        // return;
 
         // let keycode = Keycode::try_from(15).unwrap();
         // display.visit_window_tree(display.root_window(), &mut |window| {
