@@ -254,7 +254,12 @@ impl AppState {
             ControlFlow::Continue
         });
         for (window, keycode, states) in to_grab {
-            debug!("grabbing key {:?} for {:?}", keycode, window);
+            debug!(
+                "grabbing key {:?} for {:?} with {} states",
+                keycode,
+                window,
+                states.len()
+            );
             for state in states {
                 self.grabber.grab_key(window, keycode, state)
             }

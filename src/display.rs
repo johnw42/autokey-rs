@@ -306,10 +306,12 @@ impl Display {
         let owner_events = 0;
         let pointer_mode = GrabModeAsync;
         let keyboard_mode = GrabModeAsync;
-        info!(
-            "grabbing key {} at {:?} with mods 0x{:x}",
-            keycode, window, modifiers
-        );
+        if modifiers == 0 {
+            info!(
+                "grabbing key {} at {:?} with mods 0x{:x}",
+                keycode, window, modifiers
+            );
+        }
         unsafe {
             XGrabKey(
                 self.ptr,
@@ -336,14 +338,16 @@ impl Display {
         );
         let keycode = keycode.value().into();
         let modifiers = modifiers.map_or(AnyModifier, |s| s.as_u8().into());
-        info!(
-            "ungrabbing key {} at {:?} with mods 0x{:x}",
-            keycode, window, modifiers
-        );
+        if modifiers == 0 {
+            info!(
+                "ungrabbing key {} at {:?} with mods 0x{:x}",
+                keycode, window, modifiers
+            );
+        }
         unsafe {
             XUngrabKey(self.ptr, keycode, modifiers, window.id);
         }
-        self.sync(); // TODO: remove
+        self.sync(); // TODO: remove67
     }
 
     pub fn root_window(&self) -> WindowRef {
@@ -393,7 +397,7 @@ impl Display {
 }
 
 const MIN_RECORDED_EVENT: c_int = KeyPress;
-const MAX_RECORDED_EVENT: c_int = ButtonRelease;
+const MAX_RECORDED_EVENT: c_int = KeyRelease; //ButtonRelease;
 
 impl<'h> RecordingDisplay<'h> {
     pub fn new<H>(handler: H) -> Self

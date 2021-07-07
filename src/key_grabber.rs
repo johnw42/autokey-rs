@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use enumset::EnumSet;
+use log::info;
 
 use crate::{
     display::{Display, WindowRef},
@@ -14,7 +15,7 @@ pub struct KeyGrabber {
     active_grabs: HashMap<(WindowRef, Keycode), HashSet<EnumSet<Modifier>>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Grab {
     window: WindowRef,
     keycode: Keycode,
@@ -55,9 +56,7 @@ impl KeyGrabber {
             state,
             is_grabbed: true,
         };
-        if self.apply_grab(grab.clone(), false) {
-            self.current_grabs.push(grab);
-        }
+        self.apply_grab(grab.clone(), false);
     }
 
     pub fn ungrab_key(&mut self, window: WindowRef, keycode: Keycode) {
@@ -70,47 +69,73 @@ impl KeyGrabber {
                     state,
                     is_grabbed: false,
                 };
-                if self.apply_grab(grab.clone(), false) {
-                    self.current_grabs.push(grab);
-                }
+                self.apply_grab(grab.clone(), false);
             }
         }
     }
 
     pub fn push_state(&mut self) {
+        info!("pushing state with {} items", self.current_grabs.len());
         self.undo_stack
             .push(std::mem::take(&mut self.current_grabs));
     }
 
     pub fn pop_state(&mut self) {
         let grabs = self.undo_stack.pop().expect("empty stack");
-        for grab in grabs.into_iter().rev() {
-            self.apply_grab(grab, true);
+        info!("popping state with {} items", grabs.len());
+        for grab in grabs.iter().rev() {
+            self.apply_grab(grab.clone(), true);
         }
+        self.current_grabs = grabs;
+        info!("popped state with {} items", self.current_grabs.len());
     }
 
-    fn apply_grab(
-        &mut self,
-        Grab {
+    fn apply_grab(&mut self, grab: Grab, undo: bool) {
+        let Grab {
             window,
             keycode,
             state,
             is_grabbed,
-        }: Grab,
-        undo: bool,
-    ) -> bool {
+        } = grab.clone();
         let active_states = self.active_grabs.entry((window, keycode)).or_default();
-        if undo == is_grabbed {
+        if state.is_empty() {
+            info!("applying grab: {:?}", grab);
+            info!("active grab? {}", active_states.contains(&state));
+        }
+        // info!("num active states: {}", active_states.len());7
+        let did_update = if !is_grabbed {
             if active_states.remove(&state) {
+                if state.is_empty() {
+                    info!("ungrabbing {:?}", keycode);
+                }
                 self.display.ungrab_key(window, keycode, Some(state));
-                return true;
+                true
+            } else {
+                false
             }
         } else {
             if active_states.insert(state) {
+                if state.is_empty() {
+                    info!("grabbing {:?}", keycode);
+                }
                 self.display.grab_key(window, keycode, Some(state));
-                return true;
+                true
+            } else {
+                false
             }
+        };
+
+        if did_update && !undo {
+            self.current_grabs.push(grab);
         }
-        false
+
+        if state.is_empty() {
+            info!(
+                "did_update? {}; undo? {}; current_grabs.len() == {}",
+                did_update,
+                undo,
+                self.current_grabs.len()
+            );
+        }
     }
 }
