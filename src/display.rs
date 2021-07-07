@@ -12,7 +12,7 @@ use x11::xlib::{
     AnyModifier, ButtonRelease, CreateNotify, Display as RawDisplay, GrabModeAsync, NoSymbol,
     StructureNotifyMask, SubstructureNotifyMask, Window as WindowId, XConnectionNumber,
     XDefaultRootWindow, XDisplayKeycodes, XEvent, XFree, XFreeModifiermap, XGetKeyboardMapping,
-    XGetModifierMapping, XGrabKey, XNextEvent, XQueryTree, XSelectInput,
+    XGetModifierMapping, XGrabKey, XNextEvent, XQueryTree, XSelectInput, XSync, XUngrabKey,
 };
 use x11::xtest::XTestFakeButtonEvent;
 use x11::{
@@ -81,6 +81,11 @@ pub type RecordingHandler<'h> = dyn FnMut(RecordedEvent) + 'h;
 pub struct KeyboardMapping {
     pub keysym_to_keycode: HashMap<Keysym, Keycode>,
     pub keycode_to_keysyms: HashMap<Keycode, Vec<Keysym>>,
+}
+
+#[derive(Default)]
+pub struct ModifierMapping {
+    pub keycode_to_modifiers: HashMap<Keycode, EnumSet<Modifier>>,
 }
 
 // https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#Encoding::Events
@@ -167,6 +172,13 @@ impl Display {
         }
     }
 
+    pub fn sync(&self) {
+        let discard = 0;
+        unsafe {
+            XSync(self.ptr, discard);
+        }
+    }
+
     pub fn get_keyboard_mapping(&self) -> KeyboardMapping {
         let mut mapping: KeyboardMapping = Default::default();
         unsafe {
@@ -202,22 +214,26 @@ impl Display {
         mapping
     }
 
-    pub fn get_modifier_mapping(&self) -> HashMap<Modifier, Vec<Keycode>> {
-        let mut hash_map: HashMap<Modifier, Vec<Keycode>> = HashMap::new();
+    pub fn get_modifier_mapping(&self) -> ModifierMapping {
+        let mut mod_mapping: ModifierMapping = Default::default();
         unsafe {
             let mapping = &mut *XGetModifierMapping(self.ptr);
             let mut ptr = mapping.modifiermap;
             for modifier in EnumSet::<Modifier>::all().iter() {
                 for _ in 0..mapping.max_keypermod {
                     if let Ok(code) = Keycode::try_from(*ptr) {
-                        hash_map.entry(modifier).or_default().push(code);
+                        mod_mapping
+                            .keycode_to_modifiers
+                            .entry(code)
+                            .or_default()
+                            .insert(modifier);
                     }
                     ptr = ptr.add(1);
                 }
             }
             XFreeModifiermap(mapping);
         }
-        hash_map
+        mod_mapping
     }
 
     pub fn send_input_event(&self, event: InputEvent) -> Result<(), ()> {
@@ -248,8 +264,6 @@ impl Display {
     where
         F: FnMut(Window),
     {
-        trace!("visiting window {:?}", window);
-        f(window);
         unsafe {
             let mut root = 0;
             let mut parent = 0;
@@ -271,6 +285,8 @@ impl Display {
                 XFree(children as *mut _);
             }
         }
+        trace!("visiting window {:?}", window);
+        f(window);
     }
 
     pub fn grab_key(&self, window: Window, keycode: Keycode, modifiers: Option<EnumSet<Modifier>>) {
@@ -298,6 +314,29 @@ impl Display {
                 keyboard_mode,
             );
         }
+        self.sync(); // TODO: remove
+    }
+
+    pub fn ungrab_key(
+        &self,
+        window: Window,
+        keycode: Keycode,
+        modifiers: Option<EnumSet<Modifier>>,
+    ) {
+        assert!(
+            modifiers.is_some(),
+            "setting modifiers = None causes weird access errors"
+        );
+        let keycode = keycode.value().into();
+        let modifiers = modifiers.map_or(AnyModifier, |s| s.as_u8().into());
+        info!(
+            "ungrabbing key {} at {:?} with mods 0x{:x}",
+            keycode, window, modifiers
+        );
+        unsafe {
+            XUngrabKey(self.ptr, keycode, modifiers, window.id);
+        }
+        self.sync(); // TODO: remove
     }
 
     pub fn root_window(&self) -> Window {

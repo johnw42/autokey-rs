@@ -3,10 +3,12 @@
     name: "swap 6/7",
     contents: [
       {
+        super: false,
         input: 15,
         output: 16,
       },
       {
+        super: false,
         input: 16,
         output: 15,
       },

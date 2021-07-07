@@ -2,10 +2,10 @@ mod config;
 mod display;
 mod key;
 
-use config::{Config, KeySpec};
+use config::{Config, ControlFlow, KeySpec};
 use display::{
-    Button, Display, Event, InputEvent, KeyboardMapping, RecordedEvent, RecordingDisplay, UpOrDown,
-    Window,
+    Button, Display, Event, InputEvent, KeyboardMapping, ModifierMapping, RecordedEvent,
+    RecordingDisplay, UpOrDown, Window,
 };
 use enumset::EnumSet;
 use key::*;
@@ -16,157 +16,252 @@ use std::convert::TryFrom;
 
 struct AppState<'d> {
     display: &'d Display,
-    _keys_down: BTreeSet<Keycode>,
+    keys_down: BTreeSet<Keycode>,
     config: Config,
     keyboard_mapping: KeyboardMapping,
-    _modifiers: EnumSet<Modifier>,
+    modifier_mapping: ModifierMapping,
+    modifiers: EnumSet<Modifier>,
     ignore_queue: VecDeque<InputEvent>,
 }
 
 impl<'d> AppState<'d> {
-    fn _keysym_to_keycode(&self, keysym: Keysym) -> Option<Keycode> {
+    fn keysym_to_keycode(&self, keysym: Keysym) -> Option<Keycode> {
         self.keyboard_mapping
             .keysym_to_keycode
             .get(&keysym)
             .copied()
     }
 
-    fn keycode_to_keysym(&self, keycode: Keycode) -> Option<Keysym> {
+    fn _keycode_to_keysyms(&self, keycode: Keycode) -> Vec<Keysym> {
         self.keyboard_mapping
             .keycode_to_keysyms
             .get(&keycode)
-            .map(|v| v[0])
+            .cloned()
+            .unwrap_or_default()
     }
 
-    fn keycode_to_string(&self, keycode: Keycode) -> String {
-        self.keycode_to_keysym(keycode)
+    fn _keycode_to_string(&self, keycode: Keycode) -> String {
+        self._keycode_to_keysyms(keycode)
+            .get(0)
             .and_then(|k| k.to_string())
             .map(|s| format!("<{}>", s))
             .unwrap_or_else(|| format!("<keycode_{}>", keycode.value()))
     }
 
-    fn log_key(&self, label: &str, keycode: Keycode, state: EnumSet<Modifier>) {
+    fn _log_key(&self, label: &str, keycode: Keycode, state: EnumSet<Modifier>) {
         debug!(
             "{}: code={}, sym={} ({:?}), state={:?}, down=[{}]",
             label,
             keycode.value(),
-            self.keycode_to_keysym(keycode)
+            self._keycode_to_keysyms(keycode)
+                .get(0)
                 .map(|k| k.value())
                 .unwrap_or(0),
-            self.keycode_to_string(keycode),
+            self._keycode_to_string(keycode),
             state,
-            self._keys_down
+            self.keys_down
                 .iter()
-                .map(|&k| self.keycode_to_string(k))
+                .map(|&k| self._keycode_to_string(k))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
     }
 
-    fn _send_input_event(&mut self, event: InputEvent) {
+    fn send_input_event(&mut self, event: InputEvent) {
+        info!("sending event: {:?}", event);
         match self.display.send_input_event(event.clone()) {
             Ok(_) => self.ignore_queue.push_back(event),
             Err(_) => error!("error sending input event: {:?}", event),
         }
     }
 
+    fn keyspec_matches_button(&self, spec: &KeySpec, button: &Button) -> bool {
+        let spec_code = match spec {
+            KeySpec::Code(code) => Keycode::try_from(*code).ok(),
+            KeySpec::Sym(sym) => sym.parse().ok().and_then(|sym| self.keysym_to_keycode(sym)),
+        };
+        match button {
+            Button::Key(button_code) => Some(*button_code) == spec_code,
+            Button::MouseButton(_) => false,
+        }
+    }
+
+    fn keyspec_to_input_event(&self, spec: &KeySpec, direction: UpOrDown) -> Option<InputEvent> {
+        let code = match spec {
+            KeySpec::Code(code) => Keycode::try_from(*code).ok(),
+            KeySpec::Sym(sym) => sym.parse().ok().and_then(|sym| self.keysym_to_keycode(sym)),
+        };
+        code.map(|code| InputEvent {
+            button: Button::Key(code),
+            direction,
+        })
+    }
+
     fn handle_recorded_event(&mut self, event: RecordedEvent) {
+        // match event.input {
+        //     InputEvent {
+        //         direction: UpOrDown::Up,
+        //         button: Button::Key(k),
+        //     } if k.value() == 15 => {
+        //         info!("xyzzy");
+        //         self.display
+        //             .send_input_event(InputEvent {
+        //                 direction: UpOrDown::Down,
+        //                 button: Button::Key(Keycode::try_from(16).unwrap()),
+        //             })
+        //             .unwrap();
+        //         self.display
+        //             .send_input_event(InputEvent {
+        //                 direction: UpOrDown::Up,
+        //                 button: Button::Key(Keycode::try_from(16).unwrap()),
+        //             })
+        //             .unwrap();
+        //     }
+        //     _ => {}
+        // }
+        // return;
+
+        use Button::*;
+        use UpOrDown::*;
+
+        info!("handling input event: {:?}", event);
+
+        match event.input {
+            InputEvent {
+                direction,
+                button: Key(code),
+            } => match direction {
+                Up => {
+                    self.keys_down.remove(&code);
+                }
+                Down => {
+                    self.keys_down.insert(code);
+                }
+            },
+            _ => {}
+        }
+
+        self.modifiers = self
+            .keys_down
+            .iter()
+            .map(|&code| {
+                self.modifier_mapping
+                    .keycode_to_modifiers
+                    .get(&code)
+                    .copied()
+                    .unwrap_or_default()
+            })
+            .collect();
+
         if let Some(to_ignore) = self.ignore_queue.front() {
             if event.input == *to_ignore {
                 info!("ignoring event: {:?}", event);
                 self.ignore_queue.pop_front();
+                info!("queue length: {}", self.ignore_queue.len());
                 return;
             }
         }
 
-        use Button::*;
-        use UpOrDown::*;
-        match event.input {
-            InputEvent {
-                direction: Down,
-                button: Key(code),
-            } => {
-                // if code.value() == 15 {
-                //     self.ignore_queue
-                //         .push_back(Box::new(move |e| match &e.detail {
-                //             RecordedEventDetail::KeyPress(c) if *c == code => true,
-                //             _ => false,
-                //         }));
-                //     self.ignore_queue
-                //         .push_back(Box::new(move |e| match &e.detail {
-                //             RecordedEventDetail::KeyRelease(c) if *c == code => true,
-                //             _ => false,
-                //         }));
-                //     self.display.send_key_event(code, display::KeyEvent::Press);
-                //     self.display
-                //         .send_key_event(code, display::KeyEvent::Release);
-                //     info!("sent keycode");
-                // }
-
-                self._keys_down.insert(code);
-                self.log_key("KeyPress", code, event.state);
-            }
+        match &event.input {
             InputEvent {
                 direction: Up,
-                button: Key(code),
+                button,
             } => {
-                self._keys_down.remove(&code);
-                self.log_key("KeyRelease", code, event.state);
-                // if code == 52 && event.state == 0xc {
-                //     let press = 1;
-                //     let release = 0;
-                //     unsafe {
-                //         for &key in self.keys_down.iter() {
-                //             XTestFakeKeyEvent(
-                //                 self.main_display,
-                //                 key.value() as c_uint,
-                //                 release,
-                //                 0,
-                //             );
-                //         }
-                //         XTestFakeKeyEvent(self.main_display, 52, press, 0);
-                //         XTestFakeKeyEvent(self.main_display, 52, release, 0);
-                //         for &key in self.keys_down.iter() {
-                //             XTestFakeKeyEvent(
-                //                 self.main_display,
-                //                 key.value() as c_uint,
-                //                 press,
-                //                 0,
-                //             );
-                //         }
-                //     }
-                // }
+                let mut to_send = Vec::new();
+                self.config.visit_key_mappings(&mut |m| {
+                    if self.keyspec_matches_button(&m.input, button)
+                        && m.mods.matches(self.modifiers)
+                    {
+                        let output_seq = match &m.output {
+                            config::KeySeq::Key(k) => vec![vec![k.clone()]],
+                            config::KeySeq::Chord(c) => vec![c.clone()],
+                            config::KeySeq::ChordSeq(s) => s.clone(),
+                        };
+                        for chord in output_seq {
+                            let events = chord
+                                .iter()
+                                .map(|key| self.keyspec_to_input_event(key, Down))
+                                .collect::<Option<Vec<_>>>();
+                            match events {
+                                Some(events) => {
+                                    to_send.extend(events.iter().map(|e| e.clone()));
+                                    to_send.extend(events.into_iter().rev().map(|mut e| {
+                                        e.direction = Up;
+                                        e
+                                    }))
+                                }
+                                None => error!("invalid keyspec: {:?}", m.output),
+                            }
+                        }
+                        ControlFlow::Break
+                    } else {
+                        ControlFlow::Continue
+                    }
+                });
+                // TODO: release modifier keys if neccessary
+                //self.grab_or_ungrab_keys(false);
+                for event in to_send.into_iter() {
+                    self.send_input_event(event)
+                }
+                //self.grab_or_ungrab_keys(true767);
             }
-            InputEvent {
-                button: MouseButton(_),
-                ..
-            } => {
-                info!("ignoring mouse event: {:?}", event);
-            }
+
+            // if code.value() == 15 {
+            //     self.ignore_queue
+            //         .push_back(Box::new(move |e| match &e.detail {
+            //             RecordedEventDetail::KeyPress(c) if *c == code => true,
+            //             _ => false,
+            //         }));
+            //     self.ignore_queue
+            //         .push_back(Box::new(move |e| match &e.detail {
+            //             RecordedEventDetail::KeyRelease(c) if *c == code => true,
+            //             _ => false,
+            //         }));
+            //     self.display.send_key_event(code, display::KeyEvent::Press);
+            //     self.display
+            //         .send_key_event(code, display::KeyEvent::Release);
+            //     info!("sent keycode");
+            // }
+            _ => {}
         }
     }
 
-    fn grab_keys_for_window(&mut self, window: Window) {
-        self.display.visit_window_tree(window, &mut |child| {
-            self.config.visit_key_mappings(&|k| match k.input {
-                KeySpec::Code(c) => {
-                    for mod_set in k.mods.mod_sets() {
-                        self.display.grab_key(
-                            child,
-                            Keycode::try_from(c as u8).expect("invalid keycode"),
-                            Some(mod_set),
-                        );
+    fn grab_or_ungrab_keys(&self, grab: bool) {
+        self.grab_or_ungrab_keys_for_window(self.display.root_window(), grab)
+    }
+
+    fn grab_or_ungrab_keys_for_window(&self, window: Window, grab: bool) {
+        info!("grab_keys_for_window {:?}", window);
+        let child = window;
+        // self.display.visit_window_tree(window, &mut |child| {
+        self.config.visit_key_mappings(&mut |k| {
+            let code = match &k.input {
+                KeySpec::Code(c) => Some(Keycode::try_from(*c as u8).expect("invalid keycode")),
+                KeySpec::Sym(s) => {
+                    let sym = s.parse().expect("invalid keysym");
+                    self.keyboard_mapping.keysym_to_keycode.get(&sym).copied()
+                }
+            };
+            if let Some(code) = code {
+                debug!("grabbing key {:?} for {:?}", code, child);
+                for mod_set in k.mods.mod_sets() {
+                    if grab {
+                        self.display.grab_key(child, code, Some(mod_set));
+                    } else {
+                        self.display.ungrab_key(child, code, Some(mod_set));
                     }
                 }
-                KeySpec::Sym(_) => {}
-            })
+                self.display.sync();
+            }
+            ControlFlow::Continue
         });
+        // });
     }
 
     fn handle_xevent(&mut self, event: Event) {
-        match event {
-            Event::CreateNotify { window } => self.grab_keys_for_window(window),
-        }
+        // match event {
+        //     Event::CreateNotify { window } => self.grab_keys_for_window(window),
+        // }
     }
 
     fn run() {
@@ -181,13 +276,15 @@ impl<'d> AppState<'d> {
         let config = json5::from_str(include_str!("config.json5")).unwrap();
         info!("config: {:?}", config);
         let keyboard_mapping = display.get_keyboard_mapping();
+        let modifier_mapping = display.get_modifier_mapping();
 
         let state = AppState {
             display: &display,
-            _keys_down: Default::default(),
+            keys_down: Default::default(),
             config,
             keyboard_mapping,
-            _modifiers: Default::default(),
+            modifier_mapping,
+            modifiers: Default::default(),
             ignore_queue: Default::default(),
         };
 
@@ -202,6 +299,8 @@ impl<'d> AppState<'d> {
         //         );
         //     }
         // });
+
+        state.grab_or_ungrab_keys(true);
 
         let state = RefCell::new(state);
         let record_display =

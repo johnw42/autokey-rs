@@ -5,10 +5,10 @@ use serde::Deserialize;
 
 use crate::key::*;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum KeySpec {
-    Code(i32),
+    Code(u8),
     Sym(String),
 }
 
@@ -62,6 +62,18 @@ pub struct ModSpec {
 }
 
 impl ModSpec {
+    pub fn matches(&self, modifiers: EnumSet<Modifier>) -> bool {
+        for modifier in EnumSet::all() {
+            match (self.disposition_of(modifier), modifiers.contains(modifier)) {
+                (ModDisposition::Required, false) | (ModDisposition::Forbidden, true) => {
+                    return false
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
     pub fn mod_sets(&self) -> Vec<EnumSet<Modifier>> {
         let required_set = self.with_disposition(ModDisposition::Required);
         let allowed_set = self.with_disposition(ModDisposition::Allowed);
@@ -77,7 +89,7 @@ impl ModSpec {
         result
     }
 
-    pub fn disposition_of(&self, modifier: Modifier) -> ModDisposition {
+    fn disposition_of(&self, modifier: Modifier) -> ModDisposition {
         match modifier {
             Modifier::Shift => self.shift,
             Modifier::CapsLock => self.capslock,
@@ -90,7 +102,7 @@ impl ModSpec {
         }
     }
 
-    pub fn with_disposition(&self, disposition: ModDisposition) -> EnumSet<Modifier> {
+    fn with_disposition(&self, disposition: ModDisposition) -> EnumSet<Modifier> {
         EnumSet::<Modifier>::all()
             .into_iter()
             .filter(|m| self.disposition_of(*m) == disposition)
@@ -144,18 +156,27 @@ pub struct ConfigItem {
 }
 
 impl ConfigItem {
-    pub fn visit_key_mappings<F>(&self, f: &F)
+    pub fn visit_key_mappings<F>(&self, f: &mut F) -> ControlFlow
     where
-        F: Fn(&KeyMapping),
+        F: FnMut(&KeyMapping) -> ControlFlow,
     {
         if self.enabled {
             match &self.body {
-                ItemBody::KeyMapping(m) => f(m),
+                ItemBody::KeyMapping(m) => {
+                    if f(m) == ControlFlow::Break {
+                        return ControlFlow::Break;
+                    }
+                }
                 ItemBody::Group { contents } => {
-                    contents.iter().for_each(|item| item.visit_key_mappings(f))
+                    for item in contents {
+                        if item.visit_key_mappings(f) == ControlFlow::Break {
+                            return ControlFlow::Break;
+                        }
+                    }
                 }
             }
         }
+        ControlFlow::Continue
     }
 }
 
@@ -170,10 +191,21 @@ pub enum ItemBody {
 pub struct Config(Vec<ConfigItem>);
 
 impl Config {
-    pub fn visit_key_mappings<F>(&self, f: &F)
+    pub fn visit_key_mappings<F>(&self, f: &mut F) -> ControlFlow
     where
-        F: Fn(&KeyMapping),
+        F: FnMut(&KeyMapping) -> ControlFlow,
     {
-        self.0.iter().for_each(|item| item.visit_key_mappings(f))
+        for item in &self.0 {
+            if item.visit_key_mappings(f) == ControlFlow::Break {
+                return ControlFlow::Break;
+            }
+        }
+        ControlFlow::Continue
     }
+}
+
+#[derive(PartialEq, Eq)]
+pub enum ControlFlow {
+    Continue,
+    Break,
 }
