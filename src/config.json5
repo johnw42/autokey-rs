@@ -1,6 +1,7 @@
 [
   {
     name: "test",
+    enabled: false,
     super: false,
     contents: [
       {
@@ -17,7 +18,7 @@
   },
   {
     name: 'CLEAVE',
-    enabled: false,
+    enabled: true,
     contents: [
       {
         name: 'Untab',

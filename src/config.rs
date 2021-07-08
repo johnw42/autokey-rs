@@ -98,6 +98,18 @@ pub struct ModSpec {
 const NUM_MODS: usize = 8;
 
 impl ModSpec {
+    pub fn required_set(&self) -> EnumSet<Modifier> {
+        self.with_disposition(ModDisposition::Required)
+    }
+
+    pub fn allowed_set(&self) -> EnumSet<Modifier> {
+        self.with_disposition(ModDisposition::Allowed)
+    }
+
+    pub fn forbidden_set(&self) -> EnumSet<Modifier> {
+        self.with_disposition(ModDisposition::Forbidden)
+    }
+
     fn combine_with(&self, other: &Self) -> Self {
         let mine = self.to_array();
         let theirs = other.to_array();

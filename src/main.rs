@@ -3,7 +3,7 @@ mod display;
 mod key;
 mod key_grabber;
 
-use config::{Config, ValidConfig};
+use config::{Config, ModSpec, ValidConfig};
 use display::{
     Button, Display, Event, InputEvent, RecordedEvent, RecordingDisplay, UpOrDown, WindowRef,
 };
@@ -106,10 +106,12 @@ impl AppState {
                 direction: Up,
                 button,
             } => {
+                let mut key_mapping = None;
                 let mut to_send = Vec::new();
                 for k in &self.valid_config.key_mappings {
                     if let Button::Key(keycode) = *button {
                         if keycode == k.input && k.mods.matches(self.modifiers) {
+                            key_mapping = Some(k);
                             for chord in &k.output {
                                 for keycode in chord.iter().copied() {
                                     to_send.push(InputEvent {
@@ -124,22 +126,92 @@ impl AppState {
                                     });
                                 }
                             }
+                            break;
                         }
                     }
                 }
-                self.display.flush();
-                self.grabber.push_state();
-                for event in to_send.into_iter() {
-                    if let Button::Key(keycode) = event.button {
-                        self.grabber.ungrab_key(self.display.root_window(), keycode);
-                    }
-                    self.send_input_event(event)
+                if let Some(key_mapping) = key_mapping {
+                    self.display.flush();
+                    self.grabber.push_state();
+                    debug_assert!(self.modifiers.is_superset(key_mapping.mods.required_set()));
+                    debug_assert!(self.modifiers.is_disjoint(key_mapping.mods.forbidden_set()));
+                    self.with_modifiers(
+                        self.modifiers & key_mapping.mods.allowed_set(),
+                        |inner_self| {
+                            for event in to_send.into_iter() {
+                                if let Button::Key(keycode) = event.button {
+                                    inner_self
+                                        .grabber
+                                        .ungrab_key(inner_self.display.root_window(), keycode);
+                                }
+                                inner_self.send_input_event(event)
+                            }
+                        },
+                    );
+                    self.display.flush();
+                    self.grabber.pop_state();
                 }
-                self.display.flush();
-                self.grabber.pop_state();
             }
             _ => {}
         }
+    }
+
+    fn with_modifiers<F>(&mut self, modifiers: EnumSet<Modifier>, f: F)
+    where
+        F: FnOnce(&mut Self),
+    {
+        let to_release: Vec<Keycode> = self
+            .keys_down
+            .iter()
+            .copied()
+            .filter(|&keycode| {
+                self.modifier_mapping
+                    .keycode_to_modifier(keycode)
+                    .map_or(false, |m| !modifiers.contains(m))
+            })
+            .collect();
+        let to_press: Vec<Keycode> = (modifiers - self.modifiers)
+            .iter()
+            .filter_map(|m| {
+                self.modifier_mapping
+                    .modifier_to_keycodes(m)
+                    .first()
+                    .copied()
+            })
+            .collect();
+
+        debug_assert!(to_release.iter().all(|k| !to_press.contains(k)));
+        debug_assert!(to_press.iter().all(|k| !to_release.contains(k)));
+
+        self.grabber.push_state();
+        for &keycode in &to_release {
+            self.grabber.ungrab_key(self.display.root_window(), keycode);
+            self.send_input_event(InputEvent {
+                button: Button::Key(keycode),
+                direction: UpOrDown::Up,
+            });
+        }
+        for &keycode in &to_press {
+            self.grabber.ungrab_key(self.display.root_window(), keycode);
+            self.send_input_event(InputEvent {
+                button: Button::Key(keycode),
+                direction: UpOrDown::Down,
+            });
+        }
+        f(self);
+        for &keycode in &to_press {
+            self.send_input_event(InputEvent {
+                button: Button::Key(keycode),
+                direction: UpOrDown::Up,
+            });
+        }
+        for &keycode in &to_release {
+            self.send_input_event(InputEvent {
+                button: Button::Key(keycode),
+                direction: UpOrDown::Down,
+            });
+        }
+        self.grabber.pop_state();
     }
 
     fn grab_keys_for_window(&mut self, window: WindowRef) {
