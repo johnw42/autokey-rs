@@ -10,8 +10,9 @@ use std::ptr::{null, null_mut};
 use x11::xlib::{
     AnyModifier, ButtonRelease, CreateNotify, Display as RawDisplay, GrabModeAsync, NoSymbol,
     StructureNotifyMask, SubstructureNotifyMask, Window as WindowId, XConnectionNumber,
-    XDefaultRootWindow, XDisplayKeycodes, XEvent, XFree, XFreeModifiermap, XGetKeyboardMapping,
-    XGetModifierMapping, XGrabKey, XNextEvent, XQueryTree, XSelectInput, XSync, XUngrabKey,
+    XDefaultRootWindow, XDisplayKeycodes, XEvent, XFlush, XFree, XFreeModifiermap,
+    XGetKeyboardMapping, XGetModifierMapping, XGrabKey, XNextEvent, XQueryTree, XSelectInput,
+    XSync, XUngrabKey,
 };
 use x11::xtest::XTestFakeButtonEvent;
 use x11::{
@@ -168,6 +169,12 @@ impl Display {
         }
     }
 
+    pub fn flush(&self) {
+        unsafe {
+            XFlush(self.ptr);
+        }
+    }
+
     pub fn get_keyboard_mapping(&self) -> KeyboardMapping {
         let mut mapping: KeyboardMapping = Default::default();
         unsafe {
@@ -298,7 +305,6 @@ impl Display {
                 keyboard_mode,
             );
         }
-        self.sync();
     }
 
     pub fn ungrab_key(
@@ -318,7 +324,6 @@ impl Display {
         unsafe {
             XUngrabKey(self.ptr, keycode, modifiers, window.id);
         }
-        self.sync();
     }
 
     pub fn root_window(&self) -> WindowRef {

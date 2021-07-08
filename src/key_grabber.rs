@@ -108,6 +108,7 @@ impl KeyGrabber {
         };
 
         if did_update {
+            self.display.flush();
             self.current_grabs.push(grab);
         }
 

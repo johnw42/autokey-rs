@@ -129,7 +129,7 @@ impl AppState {
                         }
                     }
                 }
-                self.display.sync();
+                self.display.flush();
                 self.grabber.push_state();
                 for event in to_send.into_iter() {
                     if let Button::Key(keycode) = event.button {
@@ -137,7 +137,7 @@ impl AppState {
                     }
                     self.send_input_event(event)
                 }
-                self.display.sync();
+                self.display.flush();
                 self.grabber.pop_state();
             }
             _ => {}
