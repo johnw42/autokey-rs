@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use enumset::{EnumSet, EnumSetType};
+use enumset::EnumSetType;
 use libc::c_ulong;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -94,48 +94,54 @@ pub enum Modifier {
 
 #[derive(Default)]
 pub struct KeyboardMapping {
-    keysym_to_keycode: HashMap<Keysym, Keycode>,
-    keycode_to_keysyms: HashMap<Keycode, Vec<Keysym>>,
+    keysym_to_keycodes: HashMap<Keysym, Vec<Keycode>>,
+    keycode_to_keysym: HashMap<Keycode, Keysym>,
 }
 
 impl KeyboardMapping {
     pub fn insert(&mut self, keysym: Keysym, keycode: Keycode) {
-        self.keysym_to_keycode.insert(keysym, keycode);
-        self.keycode_to_keysyms
-            .entry(keycode)
+        self.keysym_to_keycodes
+            .entry(keysym)
             .or_default()
-            .push(keysym);
+            .push(keycode);
+        self.keycode_to_keysym.insert(keycode, keysym);
     }
 
-    pub fn keysym_to_keycode(&self, keysym: Keysym) -> Option<Keycode> {
-        self.keysym_to_keycode.get(&keysym).copied()
-    }
-
-    pub fn _keycode_to_keysyms(&self, keycode: Keycode) -> Vec<Keysym> {
-        self.keycode_to_keysyms
-            .get(&keycode)
+    pub fn keysym_to_keycodes(&self, keysym: Keysym) -> Vec<Keycode> {
+        self.keysym_to_keycodes
+            .get(&keysym)
             .cloned()
             .unwrap_or_default()
+    }
+
+    pub fn _keycode_to_keysym(&self, keycode: Keycode) -> Option<Keysym> {
+        self.keycode_to_keysym.get(&keycode).copied()
     }
 }
 
 #[derive(Default)]
 pub struct ModifierMapping {
-    keycode_to_modifiers: HashMap<Keycode, EnumSet<Modifier>>,
+    keycode_to_modifier: HashMap<Keycode, Modifier>,
+    modifier_to_keycodes: HashMap<Modifier, Vec<Keycode>>,
 }
 
 impl ModifierMapping {
     pub fn insert(&mut self, keycode: Keycode, modifier: Modifier) {
-        self.keycode_to_modifiers
-            .entry(keycode)
+        self.keycode_to_modifier.insert(keycode, modifier);
+        self.modifier_to_keycodes
+            .entry(modifier)
             .or_default()
-            .insert(modifier);
+            .push(keycode);
     }
 
-    pub fn keycode_to_modifiers(&self, keycode: Keycode) -> EnumSet<Modifier> {
-        self.keycode_to_modifiers
-            .get(&keycode)
-            .copied()
+    pub fn keycode_to_modifier(&self, keycode: Keycode) -> Option<Modifier> {
+        self.keycode_to_modifier.get(&keycode).copied()
+    }
+
+    pub fn modifier_to_keycodes(&self, modifier: Modifier) -> Vec<Keycode> {
+        self.modifier_to_keycodes
+            .get(&modifier)
+            .cloned()
             .unwrap_or_default()
     }
 }

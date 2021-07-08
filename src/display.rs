@@ -191,13 +191,15 @@ impl Display {
             let mut ptr = keysyms;
             for keycode in min_keycode..=max_keycode {
                 let keycode = Keycode::try_from(keycode as u8).expect("invalid keycode");
-                for _ in 0..keysyms_per_keycode {
-                    let keysym = *ptr;
-                    ptr = ptr.add(1);
-                    if keysym != NoSymbol as c_ulong {
-                        let keysym = Keysym::from(keysym);
-                        mapping.insert(keysym, keycode);
+                for index in 0..keysyms_per_keycode {
+                    if index == 0 {
+                        let keysym = *ptr;
+                        if keysym != NoSymbol as c_ulong {
+                            let keysym = Keysym::from(keysym);
+                            mapping.insert(keysym, keycode);
+                        }
                     }
+                    ptr = ptr.add(1);
                 }
             }
             XFree(keysyms as *mut _);

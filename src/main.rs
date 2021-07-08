@@ -29,8 +29,7 @@ struct AppState {
 impl AppState {
     fn _keycode_to_string(&self, keycode: Keycode) -> String {
         self._keyboard_mapping
-            ._keycode_to_keysyms(keycode)
-            .get(0)
+            ._keycode_to_keysym(keycode)
             .and_then(|k| k.to_string())
             .map(|s| format!("<{}>", s))
             .unwrap_or_else(|| format!("<keycode_{}>", keycode.value()))
@@ -42,8 +41,7 @@ impl AppState {
             label,
             keycode.value(),
             self._keyboard_mapping
-                ._keycode_to_keysyms(keycode)
-                .get(0)
+                ._keycode_to_keysym(keycode)
                 .map(|k| k.value())
                 .unwrap_or(0),
             self._keycode_to_string(keycode),
@@ -88,7 +86,7 @@ impl AppState {
         self.modifiers = self
             .keys_down
             .iter()
-            .map(|&keycode| self.modifier_mapping.keycode_to_modifiers(keycode))
+            .flat_map(|&keycode| self.modifier_mapping.keycode_to_modifier(keycode))
             .collect();
 
         if let Some(to_ignore) = self.ignore_queue.front() {

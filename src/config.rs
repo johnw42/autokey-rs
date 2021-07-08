@@ -20,7 +20,9 @@ impl KeySpec {
             KeySpec::Sym(s) => {
                 let keysym = s.parse().expect("invalid keysym");
                 keyboard_mapping
-                    .keysym_to_keycode(keysym)
+                    .keysym_to_keycodes(keysym)
+                    .get(0)
+                    .copied()
                     .expect("no keysym for keycode")
             }
         }
