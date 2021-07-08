@@ -3,16 +3,23 @@ mod display;
 mod key;
 mod key_grabber;
 
-use config::{Config, ModSpec, ValidConfig};
+use config::{Config, ValidConfig};
 use display::{
     Button, Display, Event, InputEvent, RecordedEvent, RecordingDisplay, UpOrDown, WindowRef,
 };
 use enumset::EnumSet;
+use fork::Fork;
 use key::*;
 use key_grabber::KeyGrabber;
-use log::{debug, error, info};
+use libc::{c_int, getpid, wait};
+use log::{debug, error, info, LevelFilter};
+use nix::sys::signal::{signal, SigHandler, Signal};
+use nix::unistd::Pid;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
+use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
+use syslog::{BasicLogger, Facility, Formatter3164};
 
 struct AppState {
     display: Display,
@@ -269,6 +276,51 @@ impl AppState {
 }
 
 fn main() {
-    env_logger::init();
-    AppState::run();
+    if env::args().any(|arg| arg == "--daemon") {
+        if let Fork::Child = fork::daemon(false, false).unwrap() {
+            let formatter = Formatter3164 {
+                facility: Facility::LOG_USER,
+                hostname: None,
+                process: "autokey-rs".into(),
+                pid: unsafe { getpid() },
+            };
+            let logger = syslog::unix(formatter).unwrap();
+            log::set_boxed_logger(Box::new(BasicLogger::new(logger))).unwrap();
+            log::set_max_level(LevelFilter::Info);
+
+            static WAS_KILLED: AtomicBool = AtomicBool::new(false);
+
+            extern "C" fn on_sigquit(_signal: c_int) {
+                nix::sys::signal::kill(Pid::from_raw(0), Signal::SIGQUIT).unwrap();
+            }
+            extern "C" fn on_sigterm(_signal: c_int) {
+                WAS_KILLED.store(true, Ordering::SeqCst);
+                nix::sys::signal::kill(Pid::from_raw(0), Signal::SIGINT).unwrap();
+            }
+            unsafe {
+                signal(Signal::SIGQUIT, SigHandler::Handler(on_sigquit)).unwrap();
+                signal(Signal::SIGTERM, SigHandler::Handler(on_sigterm)).unwrap();
+            }
+
+            loop {
+                match fork::fork().unwrap() {
+                    Fork::Parent(_) => unsafe {
+                        let mut status = 0;
+                        wait(&mut status);
+                        if WAS_KILLED.load(Ordering::SeqCst) {
+                            break;
+                        } else {
+                            error!("child returned status {}; restarting...", status);
+                        }
+                    },
+                    Fork::Child => {
+                        AppState::run();
+                    }
+                }
+            }
+        }
+    } else {
+        env_logger::init();
+        AppState::run();
+    }
 }
