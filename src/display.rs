@@ -298,6 +298,7 @@ impl Display {
                 keyboard_mode,
             );
         }
+        self.sync();
     }
 
     pub fn ungrab_key(
@@ -317,6 +318,7 @@ impl Display {
         unsafe {
             XUngrabKey(self.ptr, keycode, modifiers, window.id);
         }
+        self.sync();
     }
 
     pub fn root_window(&self) -> WindowRef {
