@@ -78,7 +78,7 @@ impl From<BoolModDisposition> for ModDisposition {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct ModSpec {
     pub shift: ModDisposition,
@@ -93,7 +93,50 @@ pub struct ModSpec {
     pub mod5: ModDisposition,
 }
 
+const NUM_MODS: usize = 8;
+
 impl ModSpec {
+    fn combine_with(&self, other: &Self) -> Self {
+        let mine = self.to_array();
+        let theirs = other.to_array();
+        let mut array = [ModDisposition::Allowed; NUM_MODS];
+        for i in 0..NUM_MODS {
+            array[i] = match (mine[i], theirs[i]) {
+                (d1, d2) if d1 == d2 => d1,
+                (ModDisposition::Allowed, d) => d,
+                (d, ModDisposition::Allowed) => d,
+                _ => panic!("invalid combination"),
+            }
+        }
+        Self::from_slice(&array)
+    }
+
+    fn to_array(&self) -> [ModDisposition; NUM_MODS] {
+        [
+            self.shift,
+            self.capslock,
+            self.ctrl,
+            self.alt,
+            self.numlock,
+            self.mod3,
+            self.super_,
+            self.mod5,
+        ]
+    }
+
+    fn from_slice(slice: &[ModDisposition; NUM_MODS]) -> Self {
+        Self {
+            shift: slice[0],
+            capslock: slice[1],
+            ctrl: slice[2],
+            alt: slice[3],
+            numlock: slice[4],
+            mod3: slice[5],
+            super_: slice[6],
+            mod5: slice[7],
+        }
+    }
+
     pub fn matches(&self, modifiers: EnumSet<Modifier>) -> bool {
         for modifier in EnumSet::all() {
             match (self.disposition_of(modifier), modifiers.contains(modifier)) {
@@ -122,16 +165,7 @@ impl ModSpec {
     }
 
     fn disposition_of(&self, modifier: Modifier) -> ModDisposition {
-        match modifier {
-            Modifier::Shift => self.shift,
-            Modifier::CapsLock => self.capslock,
-            Modifier::Ctrl => self.ctrl,
-            Modifier::Alt => self.alt,
-            Modifier::NumLock => self.numlock,
-            Modifier::Mod3 => self.mod3,
-            Modifier::Super => self.super_,
-            Modifier::Mod5 => self.mod5,
-        }
+        self.to_array()[modifier as usize]
     }
 
     fn with_disposition(&self, disposition: ModDisposition) -> EnumSet<Modifier> {
@@ -159,10 +193,6 @@ impl Default for ModSpec {
 
 #[derive(Debug, Deserialize)]
 pub struct KeyMapping {
-    #[serde(flatten)]
-    pub conditions: Conditions,
-    #[serde(flatten)]
-    pub mods: ModSpec,
     pub input: KeySpec,
     pub output: KeySeq,
 }
@@ -170,6 +200,18 @@ pub struct KeyMapping {
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct Conditions {
     pub window_title: Option<String>,
+}
+
+impl Conditions {
+    fn combine_with<'a>(&self, other: &Self) -> Self {
+        if self.window_title.is_none() {
+            other.clone()
+        } else if other.window_title.is_none() {
+            self.clone()
+        } else {
+            unimplemented!("can't combine conditions yet")
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -184,24 +226,30 @@ pub struct ConfigItem {
     #[serde(flatten)]
     pub conditions: Conditions,
     #[serde(flatten)]
+    pub mods: ModSpec,
+    #[serde(flatten)]
     body: ItemBody,
 }
 
 impl ConfigItem {
-    pub fn visit_key_mappings<F>(&self, f: &mut F) -> ControlFlow
+    pub fn visit_key_mappings<F>(&self, state: VisitKeyMappingsState, f: &mut F) -> ControlFlow
     where
-        F: FnMut(&KeyMapping) -> ControlFlow,
+        F: FnMut(&KeyMapping, VisitKeyMappingsState) -> ControlFlow,
     {
+        let conditions = state.conditions.combine_with(&self.conditions);
+        let mods = state.mods.combine_with(&self.mods);
+        let state = VisitKeyMappingsState { conditions, mods };
+
         if self.enabled {
             match &self.body {
                 ItemBody::KeyMapping(m) => {
-                    if f(m) == ControlFlow::Break {
+                    if f(m, state.clone()) == ControlFlow::Break {
                         return ControlFlow::Break;
                     }
                 }
                 ItemBody::Group { contents } => {
                     for item in contents {
-                        if item.visit_key_mappings(f) == ControlFlow::Break {
+                        if item.visit_key_mappings(state.clone(), f) == ControlFlow::Break {
                             return ControlFlow::Break;
                         }
                     }
@@ -219,16 +267,33 @@ pub enum ItemBody {
     Group { contents: Vec<ConfigItem> },
 }
 
+#[derive(Clone, Default)]
+pub struct VisitKeyMappingsState {
+    mods: ModSpec,
+    conditions: Conditions,
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub struct Config(Vec<ConfigItem>);
 
 impl Config {
     pub fn visit_key_mappings<F>(&self, f: &mut F) -> ControlFlow
     where
-        F: FnMut(&KeyMapping) -> ControlFlow,
+        F: FnMut(&KeyMapping, VisitKeyMappingsState) -> ControlFlow,
+    {
+        self.visit_key_mappings_with_state(Default::default(), f)
+    }
+
+    fn visit_key_mappings_with_state<F>(
+        &self,
+        state: VisitKeyMappingsState,
+        f: &mut F,
+    ) -> ControlFlow
+    where
+        F: FnMut(&KeyMapping, VisitKeyMappingsState) -> ControlFlow,
     {
         for item in &self.0 {
-            if item.visit_key_mappings(f) == ControlFlow::Break {
+            if item.visit_key_mappings(state.clone(), f) == ControlFlow::Break {
                 return ControlFlow::Break;
             }
         }
@@ -239,14 +304,14 @@ impl Config {
         let mut valid = ValidConfig {
             key_mappings: Default::default(),
         };
-        self.visit_key_mappings(&mut |k| {
+        self.visit_key_mappings(&mut |k, state| {
             let input = k.input.to_keycode(keyboard_mapping);
             let output = k.output.to_chord_seq(keyboard_mapping);
             valid.key_mappings.push(ValidKeyMapping {
                 input,
                 output,
-                conditions: k.conditions.clone(),
-                mods: k.mods.clone(),
+                conditions: state.conditions,
+                mods: state.mods,
             });
             ControlFlow::Continue
         });

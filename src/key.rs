@@ -82,7 +82,7 @@ impl FromStr for Keysym {
 #[enumset(serialize_as_list)]
 #[serde(rename_all = "lowercase")]
 pub enum Modifier {
-    Shift,
+    Shift = 0,
     CapsLock,
     Ctrl,
     Alt,
