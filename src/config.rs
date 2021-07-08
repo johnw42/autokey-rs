@@ -2,6 +2,7 @@
 
 use enumset::EnumSet;
 use serde::Deserialize;
+use std::convert::TryFrom;
 
 use crate::key::*;
 
@@ -12,12 +13,43 @@ pub enum KeySpec {
     Sym(String),
 }
 
-#[derive(Debug, Deserialize)]
+impl KeySpec {
+    fn to_keycode(&self, keyboard_mapping: &KeyboardMapping) -> Keycode {
+        match self {
+            KeySpec::Code(c) => Keycode::try_from(*c as u8).expect("invalid keycode"),
+            KeySpec::Sym(s) => {
+                let keysym = s.parse().expect("invalid keysym");
+                keyboard_mapping
+                    .keysym_to_keycode(keysym)
+                    .expect("no keysym for keycode")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum KeySeq {
     Key(KeySpec),
     Chord(Vec<KeySpec>),
     ChordSeq(Vec<Vec<KeySpec>>),
+}
+
+impl KeySeq {
+    fn to_chord_seq(&self, keyboard_mapping: &KeyboardMapping) -> Vec<Vec<Keycode>> {
+        match self.clone() {
+            Self::Key(k) => Self::Chord(vec![k]).to_chord_seq(keyboard_mapping),
+            Self::Chord(c) => Self::ChordSeq(vec![c]).to_chord_seq(keyboard_mapping),
+            Self::ChordSeq(s) => s
+                .into_iter()
+                .map(|c| {
+                    c.into_iter()
+                        .map(|k| k.to_keycode(keyboard_mapping))
+                        .collect()
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +78,7 @@ impl From<BoolModDisposition> for ModDisposition {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(default)]
 pub struct ModSpec {
     pub shift: ModDisposition,
@@ -135,7 +167,7 @@ pub struct KeyMapping {
     pub output: KeySeq,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct Conditions {
     pub window_title: Option<String>,
 }
@@ -202,10 +234,39 @@ impl Config {
         }
         ControlFlow::Continue
     }
+
+    pub fn validate(&self, keyboard_mapping: &KeyboardMapping) -> ValidConfig {
+        let mut valid = ValidConfig {
+            key_mappings: Default::default(),
+        };
+        self.visit_key_mappings(&mut |k| {
+            let input = k.input.to_keycode(keyboard_mapping);
+            let output = k.output.to_chord_seq(keyboard_mapping);
+            valid.key_mappings.push(ValidKeyMapping {
+                input,
+                output,
+                conditions: k.conditions.clone(),
+                mods: k.mods.clone(),
+            });
+            ControlFlow::Continue
+        });
+        valid
+    }
 }
 
 #[derive(PartialEq, Eq)]
 pub enum ControlFlow {
     Continue,
     Break,
+}
+
+pub struct ValidConfig {
+    key_mappings: Vec<ValidKeyMapping>,
+}
+
+pub struct ValidKeyMapping {
+    pub conditions: Conditions,
+    pub mods: ModSpec,
+    pub input: Keycode,
+    pub output: Vec<Vec<Keycode>>,
 }
