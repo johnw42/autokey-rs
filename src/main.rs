@@ -3,7 +3,7 @@ mod display;
 mod key;
 mod key_grabber;
 
-use config::{Config, ControlFlow, KeySpec};
+use config::{Config, ValidConfig};
 use display::{
     Button, Display, Event, InputEvent, RecordedEvent, RecordingDisplay, UpOrDown, WindowRef,
 };
@@ -13,13 +13,13 @@ use key_grabber::KeyGrabber;
 use log::{debug, error, info};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
-use std::convert::TryFrom;
 
 struct AppState {
     display: Display,
     keys_down: BTreeSet<Keycode>,
-    config: Config,
-    keyboard_mapping: KeyboardMapping,
+    _config: Config,
+    valid_config: ValidConfig,
+    _keyboard_mapping: KeyboardMapping,
     modifier_mapping: ModifierMapping,
     modifiers: EnumSet<Modifier>,
     ignore_queue: VecDeque<InputEvent>,
@@ -28,7 +28,7 @@ struct AppState {
 
 impl AppState {
     fn _keycode_to_string(&self, keycode: Keycode) -> String {
-        self.keyboard_mapping
+        self._keyboard_mapping
             ._keycode_to_keysyms(keycode)
             .get(0)
             .and_then(|k| k.to_string())
@@ -41,7 +41,7 @@ impl AppState {
             "{}: code={}, sym={} ({:?}), state={:?}, down=[{}]",
             label,
             keycode.value(),
-            self.keyboard_mapping
+            self._keyboard_mapping
                 ._keycode_to_keysyms(keycode)
                 .get(0)
                 .map(|k| k.value())
@@ -62,34 +62,6 @@ impl AppState {
             Ok(_) => self.ignore_queue.push_back(event),
             Err(_) => error!("error sending input event: {:?}", event),
         }
-    }
-
-    fn keyspec_matches_button(&self, spec: &KeySpec, button: &Button) -> bool {
-        let spec_code = match spec {
-            KeySpec::Code(code) => Keycode::try_from(*code).ok(),
-            KeySpec::Sym(sym) => sym
-                .parse()
-                .ok()
-                .and_then(|sym| self.keyboard_mapping.keysym_to_keycode(sym)),
-        };
-        match button {
-            Button::Key(button_code) => Some(*button_code) == spec_code,
-            Button::MouseButton(_) => false,
-        }
-    }
-
-    fn keyspec_to_input_event(&self, spec: &KeySpec, direction: UpOrDown) -> Option<InputEvent> {
-        let code = match spec {
-            KeySpec::Code(code) => Keycode::try_from(*code).ok(),
-            KeySpec::Sym(sym) => sym
-                .parse()
-                .ok()
-                .and_then(|sym| self.keyboard_mapping.keysym_to_keycode(sym)),
-        };
-        code.map(|code| InputEvent {
-            button: Button::Key(code),
-            direction,
-        })
     }
 
     fn handle_recorded_event(&mut self, event: RecordedEvent) {
@@ -137,36 +109,26 @@ impl AppState {
                 button,
             } => {
                 let mut to_send = Vec::new();
-                self.config.visit_key_mappings(&mut |m| {
-                    if self.keyspec_matches_button(&m.input, button)
-                        && m.mods.matches(self.modifiers)
-                    {
-                        let output_seq = match &m.output {
-                            config::KeySeq::Key(k) => vec![vec![k.clone()]],
-                            config::KeySeq::Chord(c) => vec![c.clone()],
-                            config::KeySeq::ChordSeq(s) => s.clone(),
-                        };
-                        for chord in output_seq {
-                            let events = chord
-                                .iter()
-                                .map(|key| self.keyspec_to_input_event(key, Down))
-                                .collect::<Option<Vec<_>>>();
-                            match events {
-                                Some(events) => {
-                                    to_send.extend(events.iter().map(|e| e.clone()));
-                                    to_send.extend(events.into_iter().rev().map(|mut e| {
-                                        e.direction = Up;
-                                        e
-                                    }))
+                for k in &self.valid_config.key_mappings {
+                    if let Button::Key(keycode) = *button {
+                        if keycode == k.input && k.mods.matches(self.modifiers) {
+                            for chord in &k.output {
+                                for keycode in chord.iter().copied() {
+                                    to_send.push(InputEvent {
+                                        button: Button::Key(keycode),
+                                        direction: UpOrDown::Down,
+                                    });
                                 }
-                                None => error!("invalid keyspec: {:?}", m.output),
+                                for keycode in chord.iter().rev().copied() {
+                                    to_send.push(InputEvent {
+                                        button: Button::Key(keycode),
+                                        direction: UpOrDown::Up,
+                                    });
+                                }
                             }
                         }
-                        ControlFlow::Break
-                    } else {
-                        ControlFlow::Continue
                     }
-                });
+                }
                 self.display.sync();
                 self.grabber.push_state();
                 for event in to_send.into_iter() {
@@ -184,31 +146,18 @@ impl AppState {
 
     fn grab_keys_for_window(&mut self, window: WindowRef) {
         info!("grab_keys_for_window {:?}", window);
-        let mut to_grab = Vec::new();
-        self.config.visit_key_mappings(&mut |k| {
-            let code = match &k.input {
-                KeySpec::Code(c) => Some(Keycode::try_from(*c as u8).expect("invalid keycode")),
-                KeySpec::Sym(s) => {
-                    let keysym = s.parse().expect("invalid keysym");
-                    self.keyboard_mapping.keysym_to_keycode(keysym)
-                }
-            };
-            if let Some(keycode) = code {
-                to_grab.push((window, keycode, k.mods.mod_sets()));
-            }
-            ControlFlow::Continue
-        });
-        for (window, keycode, states) in to_grab {
+
+        for k in &self.valid_config.key_mappings {
+            let states = k.mods.mod_sets();
             debug!(
                 "grabbing key {:?} for {:?} with {} states",
-                keycode,
+                k.input,
                 window,
                 states.len()
             );
             for state in states {
-                self.grabber.grab_key(window, keycode, state)
+                self.grabber.grab_key(window, k.input, state)
             }
-            self.display.sync();
         }
     }
 
@@ -221,7 +170,7 @@ impl AppState {
     fn run() {
         let display = Display::new();
 
-        let config = json5::from_str(include_str!("config.json5")).unwrap();
+        let config: Config = json5::from_str(include_str!("config.json5")).unwrap();
         info!("config: {:?}", config);
         let keyboard_mapping = display.get_keyboard_mapping();
         let modifier_mapping = display.get_modifier_mapping();
@@ -229,8 +178,9 @@ impl AppState {
         let mut state = AppState {
             display,
             keys_down: Default::default(),
-            config,
-            keyboard_mapping,
+            valid_config: config.validate(&keyboard_mapping),
+            _config: config,
+            _keyboard_mapping: keyboard_mapping,
             modifier_mapping,
             modifiers: Default::default(),
             ignore_queue: Default::default(),

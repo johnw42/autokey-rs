@@ -261,7 +261,7 @@ pub enum ControlFlow {
 }
 
 pub struct ValidConfig {
-    key_mappings: Vec<ValidKeyMapping>,
+    pub key_mappings: Vec<ValidKeyMapping>,
 }
 
 pub struct ValidKeyMapping {
