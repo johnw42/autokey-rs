@@ -19,7 +19,8 @@ use log::{debug, error, trace};
 use std::{
     cell::RefCell,
     collections::{BTreeSet, VecDeque},
-    env,
+    path::PathBuf,
+    process,
 };
 
 struct AppState {
@@ -243,11 +244,8 @@ impl AppState {
         // }
     }
 
-    fn run() {
+    fn run(config: Config) {
         let display = Display::new();
-
-        let config: Config = json5::from_str(include_str!("config.json5")).unwrap();
-        debug!("config: {:?}", config);
         let keyboard_mapping = display.get_keyboard_mapping();
         let modifier_mapping = display.get_modifier_mapping();
 
@@ -270,15 +268,34 @@ impl AppState {
             RecordingDisplay::new(|event| state.borrow_mut().handle_recorded_event(event));
         display.event_loop(&record_display, |event| {
             state.borrow_mut().handle_xevent(event)
-        })
+        });
     }
 }
 
-fn main() {
-    if env::args().any(|arg| arg == "--daemon") {
-        run_as_daemon(AppState::run);
+fn run() -> Result<(), String> {
+    use clap::{App, Arg};
+    let matches = App::new("autokey-rs")
+        .arg(Arg::from_usage("--daemon 'Runs in daemon mode'"))
+        .arg(Arg::from_usage(
+            "-c, --config [FILE] 'Sets config file location'",
+        ))
+        .get_matches();
+
+    let config_path = matches.value_of("config").map(PathBuf::from);
+
+    if matches.is_present("daemon") {
+        let config = Config::load(config_path)?;
+        run_as_daemon(|| AppState::run(config));
     } else {
         env_logger::init();
-        AppState::run();
+        AppState::run(Config::load(config_path)?);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(msg) = run() {
+        eprintln!("autokey-rs: {}", msg);
+        process::exit(1);
     }
 }

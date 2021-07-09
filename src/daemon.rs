@@ -8,7 +8,7 @@ use nix::{
     },
     unistd::{fork, getpid, ForkResult, Pid},
 };
-use std::{convert::TryFrom, panic, sync::Mutex};
+use std::{convert::TryFrom, panic, sync::Mutex, thread::sleep, time::Duration};
 use syslog::{BasicLogger, Facility, Formatter3164};
 
 enum State {
@@ -59,6 +59,7 @@ pub fn run_as_daemon<F: FnOnce()>(f: F) {
         }
     }));
 
+    let mut sleep_time = Duration::from_millis(50);
     loop {
         let mut state = STATE.lock().unwrap();
         if let State::ShuttingDown = *state {
@@ -77,6 +78,8 @@ pub fn run_as_daemon<F: FnOnce()>(f: F) {
                 while let Err(err) = waitpid(child, None) {
                     error!("error waiting child: {:?}", err);
                 }
+                sleep(sleep_time);
+                sleep_time *= 2;
             }
             ForkResult::Child => {
                 drop(state);

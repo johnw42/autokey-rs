@@ -2,7 +2,7 @@
 
 use enumset::EnumSet;
 use serde::Deserialize;
-use std::convert::TryFrom;
+use std::{convert::TryFrom, fs::File, io::prelude::*, path::PathBuf};
 
 use crate::key::*;
 
@@ -291,6 +291,39 @@ pub struct VisitKeyMappingsState {
 pub struct Config(Vec<ConfigItem>);
 
 impl Config {
+    pub fn load(path: Option<PathBuf>) -> Result<Self, String> {
+        let path = path
+            .or_else(|| {
+                let msg = "error finding config file";
+                xdg::BaseDirectories::with_prefix("autokey-rs")
+                    .expect(msg)
+                    .find_config_file("config.json5")
+            })
+            .ok_or("no config path specified".to_string())?;
+        let mut config_data = File::open(path.clone()).map_err(|err| {
+            format!(
+                "error opening config file: {}: {}",
+                path.to_string_lossy(),
+                err
+            )
+        })?;
+        let mut config_buf = String::new();
+        config_data.read_to_string(&mut config_buf).map_err(|err| {
+            format!(
+                "error reading config file: {}: {}",
+                path.to_string_lossy(),
+                err
+            )
+        })?;
+        json5::from_str(&config_buf).map_err(|err| {
+            format!(
+                "error parsing config file: {}: {}",
+                path.to_string_lossy(),
+                err
+            )
+        })
+    }
+
     pub fn visit_key_mappings<F>(&self, f: &mut F) -> ControlFlow
     where
         F: FnMut(&KeyMapping, VisitKeyMappingsState) -> ControlFlow,

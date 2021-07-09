@@ -19,7 +19,10 @@
           "kind": "bin"
         }
       },
-      "args": [],
+      "args": [
+        "-c",
+        "${workspaceFolder}/src/config.json5"
+      ],
       "cwd": "${workspaceFolder}",
       "env": {
         "RUST_LOG": "debug"
