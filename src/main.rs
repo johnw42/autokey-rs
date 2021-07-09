@@ -142,19 +142,17 @@ impl AppState {
                     self.grabber.push_state();
                     debug_assert!(self.modifiers.is_superset(key_mapping.mods.required_set()));
                     debug_assert!(self.modifiers.is_disjoint(key_mapping.mods.forbidden_set()));
-                    self.with_modifiers(
-                        self.modifiers & key_mapping.mods.allowed_set(),
-                        |inner_self| {
-                            for event in to_send.into_iter() {
-                                if let Button::Key(keycode) = event.button {
-                                    inner_self
-                                        .grabber
-                                        .ungrab_key(inner_self.display.root_window(), keycode);
-                                }
-                                inner_self.send_input_event(event)
+                    let modifiers = self.modifiers & key_mapping.mods.allowed_set();
+                    self.with_modifiers(modifiers, |inner_self| {
+                        for event in to_send.into_iter() {
+                            if let Button::Key(keycode) = event.button {
+                                inner_self
+                                    .grabber
+                                    .ungrab_key(inner_self.display.root_window(), keycode);
                             }
-                        },
-                    );
+                            inner_self.send_input_event(event)
+                        }
+                    });
                     self.display.flush();
                     self.grabber.pop_state();
                 }
