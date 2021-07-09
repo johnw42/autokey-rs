@@ -280,12 +280,9 @@ fn run() -> Result<(), String> {
             "-c, --config [FILE] 'Sets config file location'",
         ))
         .get_matches();
-
     let config_path = matches.value_of("config").map(PathBuf::from);
-
     if matches.is_present("daemon") {
-        let config = Config::load(config_path)?;
-        run_as_daemon(|| AppState::run(config));
+        run_as_daemon(|| Config::load(config_path.clone()), AppState::run)?;
     } else {
         env_logger::init();
         AppState::run(Config::load(config_path)?);

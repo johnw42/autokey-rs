@@ -8,7 +8,7 @@ use nix::{
     },
     unistd::{fork, getpid, ForkResult, Pid},
 };
-use std::{convert::TryFrom, panic, sync::Mutex, thread::sleep, time::Duration};
+use std::{convert::TryFrom, panic, sync::Mutex, thread::sleep, time::Duration, time::SystemTime};
 use syslog::{BasicLogger, Facility, Formatter3164};
 
 enum State {
@@ -27,12 +27,18 @@ extern "C" fn on_signal(signal: c_int) {
     if let State::AwaitingChild(child) = *state {
         let _ = nix::sys::signal::kill(child, signal);
     }
-    if signal == Signal::SIGTERM {
-        *state = State::ShuttingDown;
-    }
+    *state = if signal == Signal::SIGTERM {
+        State::ShuttingDown
+    } else {
+        State::Starting
+    };
 }
 
-pub fn run_as_daemon<F: FnOnce()>(f: F) {
+pub fn run_as_daemon<T, I, R>(init: I, run: R) -> Result<(), String>
+where
+    I: Fn() -> Result<T, String>,
+    R: FnOnce(T),
+{
     // Log to syslog.
     let formatter = Formatter3164 {
         facility: Facility::LOG_USER,
@@ -59,11 +65,20 @@ pub fn run_as_daemon<F: FnOnce()>(f: F) {
         }
     }));
 
-    let mut sleep_time = Duration::from_millis(50);
+    let mut init_data = init()?;
+    let min_sleep_time = Duration::from_millis(50);
+    let mut sleep_time = min_sleep_time;
     loop {
         let mut state = STATE.lock().unwrap();
-        if let State::ShuttingDown = *state {
-            break;
+        match *state {
+            State::Starting => {}
+            State::AwaitingChild(_) => {
+                sleep(sleep_time);
+                sleep_time *= 2;
+            }
+            State::ShuttingDown => {
+                break;
+            }
         }
         match unsafe { fork() }.unwrap() {
             ForkResult::Parent { child } => {
@@ -75,11 +90,22 @@ pub fn run_as_daemon<F: FnOnce()>(f: F) {
                     signal(Signal::SIGTERM, SigHandler::Handler(on_signal)).expect(msg);
                 }
                 info!("monitoring child {}", child);
+                let start_time = SystemTime::now();
                 while let Err(err) = waitpid(child, None) {
-                    error!("error waiting child: {:?}", err);
+                    error!("error waiting for child: {:?}", err);
                 }
-                sleep(sleep_time);
-                sleep_time *= 2;
+                match SystemTime::now().duration_since(start_time) {
+                    Ok(t) if t > sleep_time => {
+                        // Child seems to be behaving, stop sleeping a long time
+                        // before trying to restart it.
+                        sleep_time = min_sleep_time;
+                    }
+                    _ => {}
+                }
+                match init() {
+                    Ok(data) => init_data = data,
+                    Err(msg) => error!("{}", msg),
+                }
             }
             ForkResult::Child => {
                 drop(state);
@@ -88,10 +114,10 @@ pub fn run_as_daemon<F: FnOnce()>(f: F) {
                     signal(Signal::SIGQUIT, SigHandler::SigDfl).expect(msg);
                     signal(Signal::SIGTERM, SigHandler::SigDfl).expect(msg);
                 }
-                info!("spawned child: {}", getpid());
-                f();
+                run(init_data);
                 break;
             }
         }
     }
+    Ok(())
 }
