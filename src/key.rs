@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use enumset::EnumSetType;
-use libc::c_ulong;
+use nix::libc::c_ulong;
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,

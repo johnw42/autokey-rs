@@ -7,19 +7,13 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-#xcb = { version="^0.9.0", features=["record"] }
+nix = "0.21.0"
 serde = { version="^1.0.126", features=["derive"] }
-libc = "0.2.97"
+#libc = "0.2.97"
 x11 = { version="^2.18.1", features=["xrecord"] }
-# strum = "^0.21"
-# strum_macros = "^0.21"
-# num-traits = "^0.2"
-# num-derive = "^0.3.3"
-# derive_more = "^0.99.14"
 enumset = { version="^1.0.6", features=["serde"] }
 json5 = "^0.3.0"
 log = "^0.4.14"
 env_logger = "^0.8.4"
-fork = "^0.1.18"
 syslog = "5.0.0"
-nix = "0.21.0"
+lazy_static = "1.4.0"

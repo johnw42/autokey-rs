@@ -3,22 +3,33 @@ mod display;
 mod key;
 mod key_grabber;
 
-use config::{Config, ValidConfig};
+use crate::{
+    config::{Config, ValidConfig},
+    key::Keycode,
+    key_grabber::KeyGrabber,
+};
 use display::{
     Button, Display, Event, InputEvent, RecordedEvent, RecordingDisplay, UpOrDown, WindowRef,
 };
 use enumset::EnumSet;
-use fork::Fork;
-use key::*;
-use key_grabber::KeyGrabber;
-use libc::{c_int, getpid, wait};
-use log::{debug, error, info, LevelFilter};
-use nix::sys::signal::{signal, SigHandler, Signal};
-use nix::unistd::Pid;
-use std::cell::RefCell;
-use std::collections::{BTreeSet, VecDeque};
-use std::env;
-use std::sync::atomic::{AtomicBool, Ordering};
+use key::{KeyboardMapping, Modifier, ModifierMapping};
+use lazy_static::lazy_static;
+use log::{debug, error, info, trace, LevelFilter};
+use nix::{
+    libc::c_int,
+    sys::{
+        signal::{signal, SigHandler, Signal},
+        wait::waitpid,
+    },
+    unistd::{fork, getpid, ForkResult, Pid},
+};
+use std::{
+    cell::RefCell,
+    collections::{BTreeSet, VecDeque},
+    convert::TryFrom,
+    env, panic,
+    sync::Mutex,
+};
 use syslog::{BasicLogger, Facility, Formatter3164};
 
 struct AppState {
@@ -62,7 +73,7 @@ impl AppState {
     }
 
     fn send_input_event(&mut self, event: InputEvent) {
-        info!("sending event: {:?}", event);
+        debug!("sending event: {:?}", event);
         match self.display.send_input_event(event.clone()) {
             Ok(_) => self.ignore_queue.push_back(event),
             Err(_) => error!("error sending input event: {:?}", event),
@@ -73,7 +84,7 @@ impl AppState {
         use Button::*;
         use UpOrDown::*;
 
-        info!("handling input event: {:?}", event);
+        debug!("handling input event: {:?}", event);
 
         match event.input {
             InputEvent {
@@ -220,11 +231,11 @@ impl AppState {
     }
 
     fn grab_keys_for_window(&mut self, window: WindowRef) {
-        info!("grab_keys_for_window {:?}", window);
+        debug!("grab_keys_for_window {:?}", window);
 
         for k in &self.valid_config.key_mappings {
             let states = k.mods.mod_sets();
-            debug!(
+            trace!(
                 "grabbing key {:?} for {:?} with {} states",
                 k.input,
                 window,
@@ -246,7 +257,7 @@ impl AppState {
         let display = Display::new();
 
         let config: Config = json5::from_str(include_str!("config.json5")).unwrap();
-        info!("config: {:?}", config);
+        debug!("config: {:?}", config);
         let keyboard_mapping = display.get_keyboard_mapping();
         let modifier_mapping = display.get_modifier_mapping();
 
@@ -273,50 +284,90 @@ impl AppState {
     }
 }
 
-fn main() {
-    if env::args().any(|arg| arg == "--daemon") {
-        if let Fork::Child = fork::daemon(false, false).unwrap() {
-            let formatter = Formatter3164 {
-                facility: Facility::LOG_USER,
-                hostname: None,
-                process: "autokey-rs".into(),
-                pid: unsafe { getpid() },
-            };
-            let logger = syslog::unix(formatter).unwrap();
-            log::set_boxed_logger(Box::new(BasicLogger::new(logger))).unwrap();
-            log::set_max_level(LevelFilter::Info);
+fn run_as_daemon() {
+    let formatter = Formatter3164 {
+        facility: Facility::LOG_USER,
+        hostname: None,
+        process: "autokey-rs".into(),
+        pid: getpid().into(),
+    };
+    let logger = syslog::unix(formatter).unwrap();
+    log::set_boxed_logger(Box::new(BasicLogger::new(logger))).unwrap();
+    log::set_max_level(LevelFilter::Info);
 
-            static WAS_KILLED: AtomicBool = AtomicBool::new(false);
+    // Make sure panics are logged.
+    panic::set_hook(Box::new(|info| {
+        let message: &str = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| *s)
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("(no message)");
+        if let Some(loc) = info.location() {
+            error!("panic at {}:{}: {}", loc.file(), loc.line(), message);
+        } else {
+            error!("panic: {}", message);
+        }
+    }));
 
-            extern "C" fn on_sigquit(_signal: c_int) {
-                nix::sys::signal::kill(Pid::from_raw(0), Signal::SIGQUIT).unwrap();
-            }
-            extern "C" fn on_sigterm(_signal: c_int) {
-                WAS_KILLED.store(true, Ordering::SeqCst);
-                nix::sys::signal::kill(Pid::from_raw(0), Signal::SIGINT).unwrap();
-            }
-            unsafe {
-                signal(Signal::SIGQUIT, SigHandler::Handler(on_sigquit)).unwrap();
-                signal(Signal::SIGTERM, SigHandler::Handler(on_sigterm)).unwrap();
-            }
+    enum State {
+        Starting,
+        AwaitingChild(Pid),
+        ShuttingDown,
+    }
 
-            loop {
-                match fork::fork().unwrap() {
-                    Fork::Parent(_) => unsafe {
-                        let mut status = 0;
-                        wait(&mut status);
-                        if WAS_KILLED.load(Ordering::SeqCst) {
-                            break;
-                        } else {
-                            error!("child returned status {}; restarting...", status);
-                        }
-                    },
-                    Fork::Child => {
-                        AppState::run();
-                    }
+    lazy_static! {
+        static ref STATE: Mutex<State> = Mutex::new(State::Starting);
+    }
+
+    extern "C" fn on_signal(signal: c_int) {
+        let signal = Signal::try_from(signal).expect("invalid signal");
+        let mut state = STATE.lock().expect("failed to acquire lock");
+        if let State::AwaitingChild(child) = *state {
+            let _ = nix::sys::signal::kill(child, signal);
+        }
+        if signal == Signal::SIGTERM {
+            *state = State::ShuttingDown;
+        }
+    }
+
+    loop {
+        let mut state = STATE.lock().unwrap();
+        if let State::ShuttingDown = *state {
+            break;
+        }
+        match unsafe { fork() }.unwrap() {
+            ForkResult::Parent { child } => {
+                *state = State::AwaitingChild(child);
+                drop(state);
+                unsafe {
+                    let msg = "failed to install signal handler";
+                    signal(Signal::SIGQUIT, SigHandler::Handler(on_signal)).expect(msg);
+                    signal(Signal::SIGTERM, SigHandler::Handler(on_signal)).expect(msg);
+                }
+                info!("monitoring child {}", child);
+                while let Err(err) = waitpid(child, None) {
+                    error!("error waiting child: {:?}", err);
                 }
             }
+            ForkResult::Child => {
+                drop(state);
+                unsafe {
+                    let msg = "failed to clear signal handler";
+                    signal(Signal::SIGQUIT, SigHandler::SigDfl).expect(msg);
+                    signal(Signal::SIGTERM, SigHandler::SigDfl).expect(msg);
+                }
+                info!("spawned child: {}", getpid());
+                AppState::run();
+                break;
+            }
         }
+    }
+}
+
+fn main() {
+    if env::args().any(|arg| arg == "--daemon") {
+        run_as_daemon();
     } else {
         env_logger::init();
         AppState::run();

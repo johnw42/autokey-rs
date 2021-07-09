@@ -1,24 +1,24 @@
 #![allow(dead_code)]
 
 use enumset::EnumSet;
-use libc::{c_int, c_uint, c_ulong, FD_ISSET, FD_SET, FD_ZERO};
 use log::trace;
-use std::cmp::max;
-use std::convert::{TryFrom, TryInto};
-use std::mem::{size_of_val, MaybeUninit};
-use std::ptr::{null, null_mut};
-use x11::xlib::{
-    AnyModifier, ButtonRelease, CreateNotify, Display as RawDisplay, GrabModeAsync, NoSymbol,
-    StructureNotifyMask, SubstructureNotifyMask, Window as WindowId, XConnectionNumber,
-    XDefaultRootWindow, XDisplayKeycodes, XEvent, XFlush, XFree, XFreeModifiermap,
-    XGetKeyboardMapping, XGetModifierMapping, XGrabKey, XNextEvent, XQueryTree, XSelectInput,
-    XSync, XUngrabKey,
+use nix::libc::{c_int, c_uint, c_ulong, select, FD_ISSET, FD_SET, FD_ZERO};
+use std::{
+    cmp::max,
+    convert::{TryFrom, TryInto},
+    mem::{size_of_val, MaybeUninit},
+    ptr::{null, null_mut},
 };
-use x11::xtest::XTestFakeButtonEvent;
 use x11::{
-    xlib::{ButtonPress, KeyPress, KeyRelease, XOpenDisplay},
+    xlib::{
+        AnyModifier, ButtonPress, ButtonRelease, CreateNotify, Display as RawDisplay,
+        GrabModeAsync, KeyPress, KeyRelease, NoSymbol, StructureNotifyMask, SubstructureNotifyMask,
+        Window as WindowId, XConnectionNumber, XDefaultRootWindow, XDisplayKeycodes, XEvent,
+        XFlush, XFree, XFreeModifiermap, XGetKeyboardMapping, XGetModifierMapping, XGrabKey,
+        XNextEvent, XOpenDisplay, XQueryTree, XSelectInput, XSync, XUngrabKey,
+    },
     xrecord::*,
-    xtest::XTestFakeKeyEvent,
+    xtest::{XTestFakeButtonEvent, XTestFakeKeyEvent},
 };
 
 use crate::key::{KeyboardMapping, Keycode, Keysym, Modifier, ModifierMapping};
@@ -352,7 +352,7 @@ impl Display {
                 let mut readfds = readfs.assume_init();
                 FD_SET(main_fd, &mut readfds);
                 FD_SET(record_fd, &mut readfds);
-                libc::select(
+                select(
                     max(main_fd, record_fd) + 1,
                     &mut readfds,
                     null_mut(),
