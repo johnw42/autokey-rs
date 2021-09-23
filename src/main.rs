@@ -16,12 +16,14 @@ use display::{
 use enumset::EnumSet;
 use key::{KeyboardMapping, Modifier, ModifierMapping};
 use log::{debug, error, trace};
+use nix::unistd::getpid;
 use std::{
     cell::RefCell,
     collections::{BTreeSet, VecDeque},
     path::PathBuf,
     process,
 };
+use syslog::{Facility, Formatter3164};
 
 struct AppState {
     display: Display,
@@ -282,7 +284,17 @@ fn run() -> Result<(), String> {
         .get_matches();
     let config_path = matches.value_of("config").map(PathBuf::from);
     if matches.is_present("daemon") {
-        run_as_daemon(|| Config::load(config_path.clone()), AppState::run)?;
+        let formatter = Formatter3164 {
+            facility: Facility::LOG_USER,
+            hostname: None,
+            process: "autokey-rs".into(),
+            pid: getpid().into(),
+        };
+        run_as_daemon(
+            || Config::load(config_path.clone()),
+            AppState::run,
+            Some(formatter),
+        )?;
     } else {
         env_logger::init();
         AppState::run(Config::load(config_path)?);
